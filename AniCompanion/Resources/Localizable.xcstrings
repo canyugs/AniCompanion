@@ -46,6 +46,11 @@
         "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "音訊引擎錯誤：%@" } }
       }
     },
+    "BlueMagpie Server" : {
+      "localizations" : {
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "BlueMagpie 伺服器" } }
+      }
+    },
     "Bored" : {
       "comment" : "Emotion name",
       "localizations" : {
@@ -111,6 +116,11 @@
       "comment" : "Emotion name",
       "localizations" : {
         "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "開心" } }
+      }
+    },
+    "Inference Timesteps" : {
+      "localizations" : {
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "推論步數" } }
       }
     },
     "Initializing..." : {
@@ -272,6 +282,11 @@
       "comment" : "Emotion name",
       "localizations" : {
         "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "驚訝" } }
+      }
+    },
+    "TTS Provider" : {
+      "localizations" : {
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "TTS 供應商" } }
       }
     },
     "TTS Voice ID" : {

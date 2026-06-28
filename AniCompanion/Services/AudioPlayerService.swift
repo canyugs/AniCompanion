@@ -25,6 +25,18 @@ enum AudioPlayerError: LocalizedError {
     }
 }
 
+private extension Data {
+    var audioFileExtension: String {
+        if count >= 12,
+           self[0] == 0x52, self[1] == 0x49, self[2] == 0x46, self[3] == 0x46,
+           self[8] == 0x57, self[9] == 0x41, self[10] == 0x56, self[11] == 0x45 {
+            return "wav"
+        }
+
+        return "mp3"
+    }
+}
+
 // MARK: - Implementation
 
 @MainActor
@@ -55,14 +67,14 @@ final class AudioPlayerService: ObservableObject {
 
     // MARK: - Public Methods
 
-    /// Decodes MP3 `Data` to PCM, plays it through the audio engine, and returns
+    /// Decodes audio `Data` to PCM, plays it through the audio engine, and returns
     /// when playback completes. `currentAmplitude` is updated in real-time for lip sync.
     func playAudioData(_ data: Data) async throws {
 
         // Stop any existing playback (but keep the engine if possible).
         stopPlayback()
 
-        // Decode MP3 data to PCM buffer.
+        // Decode audio data to PCM buffer.
         let pcmBuffer = try decodeToPCM(data: data)
 
         // Pre-compute amplitude values for lip sync (avoids AVAudioEngine tap issues).
@@ -170,29 +182,29 @@ final class AudioPlayerService: ObservableObject {
 
     // MARK: - Audio Decoding
 
-    /// Decodes MP3 `Data` into a PCM `AVAudioPCMBuffer`.
+    /// Decodes encoded audio `Data` into a PCM `AVAudioPCMBuffer`.
     private nonisolated func decodeToPCM(data: Data) throws -> AVAudioPCMBuffer {
         // Write data to a temporary file so AVAudioFile can read it.
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("mp3")
+            .appendingPathExtension(data.audioFileExtension)
 
         do {
             try data.write(to: tempURL)
         } catch {
-            throw AudioPlayerError.decodingFailed("Failed to write temporary MP3 file: \(error.localizedDescription)")
+            throw AudioPlayerError.decodingFailed("Failed to write temporary audio file: \(error.localizedDescription)")
         }
 
         defer {
             try? FileManager.default.removeItem(at: tempURL)
         }
 
-        // Open the MP3 file.
+        // Open the audio file.
         let audioFile: AVAudioFile
         do {
             audioFile = try AVAudioFile(forReading: tempURL)
         } catch {
-            throw AudioPlayerError.decodingFailed("Failed to read MP3 data: \(error.localizedDescription)")
+            throw AudioPlayerError.decodingFailed("Failed to read audio data: \(error.localizedDescription)")
         }
 
         // Read all frames into a PCM buffer.

@@ -20,6 +20,9 @@ struct SettingsView: View {
     /// backend's entry the fields show; nothing is persisted until Save.
     @State private var endpoints: [ChatBackend: String] = [:]
     @State private var apiKeys: [ChatBackend: String] = [:]
+    @State private var ttsProvider: TTSProvider = .miniMax
+    @State private var blueMagpieTTSEndpoint: String = "http://127.0.0.1:8765"
+    @State private var blueMagpieInferenceTimesteps: Int = 5
     @State private var ttsVoiceID: String = "Chinese (Mandarin)_Crisp_Girl"
     @State private var ttsEnabled: Bool = true
     @State private var language: AppLanguage = .english
@@ -99,67 +102,96 @@ struct SettingsView: View {
                         }
                     }
 
-                    // MARK: Section 1: API Keys
-
-                    SettingsSection(title: "API Keys", icon: "key.fill") {
-                        VStack(alignment: .leading, spacing: 14) {
-                            SettingsField(label: "MiniMax API Key") {
-                                SecureField("eyJ...", text: $minimaxAPIKey)
-                                    .textFieldStyle(.plain)
-                                    .font(.system(size: 13, design: .monospaced))
-                                    .padding(8)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .fill(Color.white.opacity(0.06))
-                                    )
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                                    )
-                            }
-
-                            SettingsField(label: "MiniMax Group ID") {
-                                TextField("Group ID", text: $minimaxGroupID)
-                                    .textFieldStyle(.plain)
-                                    .font(.system(size: 13, design: .monospaced))
-                                    .padding(8)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .fill(Color.white.opacity(0.06))
-                                    )
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                                    )
-                            }
-                        }
-                    }
-
-                    // MARK: Section 2: Model Settings
+                    // MARK: Section 1: Voice
 
                     SettingsSection(title: "Voice", icon: "speaker.wave.2.fill") {
                         VStack(alignment: .leading, spacing: 14) {
                             Toggle("Enable TTS Voice", isOn: $ttsEnabled)
                                 .toggleStyle(.switch)
 
-                            SettingsField(label: "TTS Voice ID") {
-                                TextField("Voice ID", text: $ttsVoiceID)
-                                    .textFieldStyle(.plain)
-                                    .font(.system(size: 13, design: .monospaced))
-                                    .padding(8)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .fill(Color.white.opacity(0.06))
-                                    )
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                                    )
+                            SettingsField(label: "TTS Provider") {
+                                Picker("", selection: $ttsProvider) {
+                                    ForEach(TTSProvider.allCases) { provider in
+                                        Text(provider.displayName).tag(provider)
+                                    }
+                                }
+                                .pickerStyle(.menu)
+                                .labelsHidden()
+                            }
+
+                            if ttsProvider == .miniMax {
+                                SettingsField(label: "MiniMax API Key") {
+                                    SecureField("eyJ...", text: $minimaxAPIKey)
+                                        .textFieldStyle(.plain)
+                                        .font(.system(size: 13, design: .monospaced))
+                                        .padding(8)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .fill(Color.white.opacity(0.06))
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                                        )
+                                }
+
+                                SettingsField(label: "MiniMax Group ID") {
+                                    TextField("Group ID", text: $minimaxGroupID)
+                                        .textFieldStyle(.plain)
+                                        .font(.system(size: 13, design: .monospaced))
+                                        .padding(8)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .fill(Color.white.opacity(0.06))
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                                        )
+                                }
+
+                                SettingsField(label: "TTS Voice ID") {
+                                    TextField("Voice ID", text: $ttsVoiceID)
+                                        .textFieldStyle(.plain)
+                                        .font(.system(size: 13, design: .monospaced))
+                                        .padding(8)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .fill(Color.white.opacity(0.06))
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                                        )
+                                }
+                            } else {
+                                SettingsField(label: "BlueMagpie Server") {
+                                    TextField("http://127.0.0.1:8765", text: $blueMagpieTTSEndpoint)
+                                        .textFieldStyle(.plain)
+                                        .font(.system(size: 13, design: .monospaced))
+                                        .padding(8)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .fill(Color.white.opacity(0.06))
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                                        )
+                                }
+
+                                SettingsField(label: "Inference Timesteps") {
+                                    Stepper(value: $blueMagpieInferenceTimesteps, in: 1...12) {
+                                        Text("\(blueMagpieInferenceTimesteps)")
+                                            .font(.system(size: 13, design: .monospaced))
+                                            .foregroundStyle(.white)
+                                    }
+                                }
                             }
                         }
                     }
 
-                    // MARK: Section 3: Language
+                    // MARK: Section 2: Language
 
                     SettingsSection(title: "Language", icon: "globe") {
                         VStack(alignment: .leading, spacing: 8) {
@@ -252,6 +284,9 @@ struct SettingsView: View {
         }
         minimaxAPIKey = appState.minimaxAPIKey
         minimaxGroupID = appState.minimaxGroupID
+        ttsProvider = TTSProvider(rawValue: appState.ttsProvider) ?? .miniMax
+        blueMagpieTTSEndpoint = appState.blueMagpieTTSEndpoint
+        blueMagpieInferenceTimesteps = appState.blueMagpieInferenceTimesteps
         ttsVoiceID = appState.ttsVoiceID
         ttsEnabled = appState.ttsEnabled
         language = AppLanguage.current
@@ -269,6 +304,9 @@ struct SettingsView: View {
         }
         appState.minimaxAPIKey = minimaxAPIKey
         appState.minimaxGroupID = minimaxGroupID
+        appState.ttsProvider = ttsProvider.rawValue
+        appState.blueMagpieTTSEndpoint = blueMagpieTTSEndpoint
+        appState.blueMagpieInferenceTimesteps = blueMagpieInferenceTimesteps
         appState.ttsVoiceID = ttsVoiceID
         appState.ttsEnabled = ttsEnabled
 
