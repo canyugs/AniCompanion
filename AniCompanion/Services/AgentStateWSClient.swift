@@ -69,7 +69,7 @@ actor AgentStateWSClient {
         continuation?.yield(.connected)
         receiveLoop()
         startPingLoop()
-        sendSubscribe(events: ["agent_state", "emotion", "notification"])
+        sendSubscribe(events: ["agent_state", "emotion", "notification", "tool_status"])
     }
 
     func disconnect() {

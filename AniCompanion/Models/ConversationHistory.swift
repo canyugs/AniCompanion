@@ -25,14 +25,24 @@ final class ConversationHistory: ObservableObject {
         addMessage(ChatMessage(role: .assistant, content: content))
     }
 
+    func addToolStatusMessage(toolName: String, status: String) {
+        let normalizedName = toolName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedName.isEmpty else { return }
+
+        let normalizedStatus = status.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = normalizedStatus.isEmpty ? normalizedName : "\(normalizedName) \(normalizedStatus)"
+        addMessage(ChatMessage(role: .assistant, content: label, isToolStatus: true))
+    }
+
     func addSystemMessage(_ content: String) {
         addMessage(ChatMessage(role: .system, content: content))
     }
 
     /// Messages to send to the LLM (most recent N messages).
     var contextMessages: [ChatMessage] {
-        let startIndex = max(0, messages.count - maxContextMessages)
-        return Array(messages[startIndex...])
+        let contextEligibleMessages = messages.filter { !$0.isToolStatus }
+        let startIndex = max(0, contextEligibleMessages.count - maxContextMessages)
+        return Array(contextEligibleMessages[startIndex...])
     }
 
     func removeLastMessage() {

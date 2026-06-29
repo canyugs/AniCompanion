@@ -197,6 +197,14 @@ private struct MessageBubbleView: View {
     private var isUser: Bool { message.role == .user }
 
     var body: some View {
+        if message.isToolStatus {
+            toolStatusBody
+        } else {
+            messageBody
+        }
+    }
+
+    private var messageBody: some View {
         HStack(alignment: .top, spacing: 8) {
             if isUser { Spacer(minLength: 40) }
 
@@ -239,6 +247,39 @@ private struct MessageBubbleView: View {
             }
 
             if !isUser { Spacer(minLength: 40) }
+        }
+    }
+
+    private var toolStatusBody: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "wrench.and.screwdriver")
+                .font(.system(size: 12))
+                .foregroundStyle(.purple.opacity(0.75))
+                .frame(width: 24, height: 24)
+                .padding(.top, 3)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(message.displayContent)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .textSelection(.disabled)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.purple.opacity(0.16))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.purple.opacity(0.2), lineWidth: 1)
+                    )
+
+                Text(formattedTimestamp)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary.opacity(0.6))
+            }
+
+            Spacer(minLength: 40)
         }
     }
 

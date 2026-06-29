@@ -374,13 +374,17 @@ final class ConversationController: ObservableObject {
                     }
                 case .notification(let text, let urgency):
                     self.handleAmbientNotification(text: text, urgency: urgency)
-                case .toolStatus:
-                    break // ponytail: display in UI when chat panel shows tool activity
+                case .toolStatus(let name, let status):
+                    self.handleToolStatus(name: name, status: status)
                 case .connected, .disconnected:
                     break
                 }
             }
         }
+    }
+
+    private func handleToolStatus(name: String, status: String) {
+        history.addToolStatusMessage(toolName: name, status: status)
     }
 
     private func handleAgentState(_ state: String) {

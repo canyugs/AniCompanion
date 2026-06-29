@@ -8,6 +8,8 @@ struct ChatMessage: Identifiable, Codable, Sendable {
     let timestamp: Date
     /// Whether this message should be hidden from the chat UI (e.g. proactive instructions).
     let isHidden: Bool
+    /// Whether this is a UI-only tool status update rather than conversational content.
+    let isToolStatus: Bool
 
     enum Role: String, Codable, Sendable {
         case user
@@ -15,12 +17,20 @@ struct ChatMessage: Identifiable, Codable, Sendable {
         case system
     }
 
-    init(id: UUID = UUID(), role: Role, content: String, timestamp: Date = Date(), isHidden: Bool = false) {
+    init(
+        id: UUID = UUID(),
+        role: Role,
+        content: String,
+        timestamp: Date = Date(),
+        isHidden: Bool = false,
+        isToolStatus: Bool = false
+    ) {
         self.id = id
         self.role = role
         self.content = content
         self.timestamp = timestamp
         self.isHidden = isHidden
+        self.isToolStatus = isToolStatus
     }
 
     /// Convert to OpenAI API message format.
