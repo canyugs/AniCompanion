@@ -20,6 +20,7 @@ actor AgentStateWSClient {
     private var task: URLSessionWebSocketTask?
     private var continuation: AsyncStream<AgentStateEvent>.Continuation?
     private var isRunning = false
+    private var generation: Int = 0
 
     let events: AsyncStream<AgentStateEvent>
 
@@ -68,6 +69,7 @@ actor AgentStateWSClient {
 
     func disconnect() {
         isRunning = false
+        generation &+= 1
         task?.cancel(with: .normalClosure, reason: nil)
         task = nil
         continuation?.yield(.disconnected)
@@ -135,12 +137,11 @@ actor AgentStateWSClient {
     // MARK: - Reconnect
 
     private func scheduleReconnect() {
+        let gen = generation
         Task {
             try? await Task.sleep(for: .seconds(5))
-            if !isRunning {
-                isRunning = false
-                connect()
-            }
+            guard self.generation == gen else { return }
+            connect()
         }
     }
 
