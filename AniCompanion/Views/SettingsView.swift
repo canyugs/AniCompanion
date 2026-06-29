@@ -23,6 +23,8 @@ struct SettingsView: View {
     @State private var ttsVoiceID: String = "Chinese (Mandarin)_Crisp_Girl"
     @State private var ttsEnabled: Bool = true
     @State private var language: AppLanguage = .english
+    @State private var tier2Enabled: Bool = false
+    @State private var tier2Endpoint: String = "http://127.0.0.1:9100"
 
     /// Shows the "restart to apply UI language" alert after a language change.
     @State private var showRestartAlert = false
@@ -159,7 +161,37 @@ struct SettingsView: View {
                         }
                     }
 
-                    // MARK: Section 3: Language
+                    // MARK: Section 3: Agent State (Tier-2)
+
+                    SettingsSection(title: "Agent State", icon: "antenna.radiowaves.left.and.right") {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Toggle("Enable Tier-2 WS", isOn: $tier2Enabled)
+                                .toggleStyle(.switch)
+
+                            if tier2Enabled {
+                                SettingsField(label: "Adapter Endpoint") {
+                                    TextField("http://127.0.0.1:9100", text: $tier2Endpoint)
+                                        .textFieldStyle(.plain)
+                                        .font(.system(size: 13, design: .monospaced))
+                                        .padding(8)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .fill(Color.white.opacity(0.06))
+                                        )
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                                        )
+                                }
+                            }
+
+                            Text("Connects to the OpenAB VTuber Adapter for real-time agent state, emotions, and ambient notifications.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.white.opacity(0.4))
+                        }
+                    }
+
+                    // MARK: Section 4: Language
 
                     SettingsSection(title: "Language", icon: "globe") {
                         VStack(alignment: .leading, spacing: 8) {
@@ -209,7 +241,7 @@ struct SettingsView: View {
             .padding(.horizontal, 24)
             .padding(.vertical, 16)
         }
-        .frame(width: 480, height: 640)
+        .frame(width: 480, height: 760)
         .background(Color(nsColor: NSColor(red: 0.12, green: 0.12, blue: 0.14, alpha: 1.0)))
         .preferredColorScheme(.dark)
         .onAppear {
@@ -255,6 +287,8 @@ struct SettingsView: View {
         ttsVoiceID = appState.ttsVoiceID
         ttsEnabled = appState.ttsEnabled
         language = AppLanguage.current
+        tier2Enabled = appState.tier2Enabled
+        tier2Endpoint = appState.tier2Endpoint
     }
 
     /// Write local state back to AppState for persistence, then reinitialize services.
@@ -279,6 +313,9 @@ struct SettingsView: View {
 
         // Apply TTS toggle immediately (no reinit needed).
         appState.conversationController?.ttsEnabled = ttsEnabled
+
+        appState.tier2Enabled = tier2Enabled
+        appState.tier2Endpoint = tier2Endpoint
 
         // Recreate services with updated settings.
         appState.reinitializeServices()

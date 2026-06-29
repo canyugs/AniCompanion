@@ -35,6 +35,15 @@ final class AppState: ObservableObject {
     /// The app/character language (UI, persona, and speech recognition). See `AppLanguage`.
     @AppStorage("app_language") var appLanguage: String = AppLanguage.systemDefault.rawValue
 
+    /// Whether the Tier-2 VTuber WS side-channel is enabled. Connects to the OpenAB
+    /// VTuber Adapter's /v1/vtuber/ws for agent-state push, structured emotions,
+    /// and ambient notifications.
+    @AppStorage("tier2_ws_enabled") var tier2Enabled: Bool = false
+
+    /// Base URL of the VTuber adapter for Tier-2 WS (e.g. "http://127.0.0.1:9100").
+    /// The client appends /v1/vtuber/ws and upgrades to ws://.
+    @AppStorage("tier2_ws_endpoint") var tier2Endpoint: String = "http://127.0.0.1:9100"
+
     // MARK: - Owned Objects
 
     /// Manages the VRM character model via three-vrm in a WKWebView.
@@ -131,6 +140,16 @@ final class AppState: ObservableObject {
         )
         controller.ttsEnabled = ttsEnabled
         conversationController = controller
+
+        // Tier-2: agent-state WS side-channel (optional).
+        if tier2Enabled {
+            let wsClient = AgentStateWSClient(
+                endpoint: tier2Endpoint,
+                token: backend.savedAPIKey()
+            )
+            controller.agentStateClient = wsClient
+            controller.startAgentStateListener()
+        }
 
         // Verify gateway reachability (HTTP health check).
         ws.connect()
