@@ -94,6 +94,12 @@ final class ConversationController: ObservableObject {
     /// Task for processing server-pushed notifications.
     private var notificationTask: Task<Void, Never>?
 
+    /// Tier-2 WebSocket client for agent-state push from the VTuber adapter.
+    var agentStateClient: AgentStateWSClient?
+
+    /// Task running the Tier-2 WS event listener.
+    private var agentStateListenerTask: Task<Void, Never>?
+
     /// Lip sync observation subscription.
     private var amplitudeCancellable: AnyCancellable?
 
@@ -345,6 +351,60 @@ final class ConversationController: ObservableObject {
     /// Reset the proactive timer (called after any message completes).
     private func resetProactiveTimer() {
         startProactiveTimer()
+    }
+
+    // MARK: - Agent State (Tier-2 WS)
+
+    /// Listen for Tier-2 WS events and drive character animation + proactive speech.
+    func startAgentStateListener() {
+        guard let client = agentStateClient else { return }
+        agentStateListenerTask?.cancel()
+
+        agentStateListenerTask = Task { [weak self] in
+            await client.connect()
+
+            for await event in await client.events {
+                guard let self, !Task.isCancelled else { break }
+                switch event {
+                case .agentState(let state, _):
+                    self.handleAgentState(state)
+                case .emotion(let tag, _):
+                    if let emotion = Emotion.from(tag: "[\(tag)]") {
+                        self.characterController?.setExpression(emotion, blendDuration: 0.3)
+                    }
+                case .notification(let text, let urgency):
+                    self.handleAmbientNotification(text: text, urgency: urgency)
+                case .toolStatus:
+                    break // ponytail: display in UI when chat panel shows tool activity
+                case .connected, .disconnected:
+                    break
+                }
+            }
+        }
+    }
+
+    private func handleAgentState(_ state: String) {
+        switch state {
+        case "thinking":
+            characterController?.playAnimation(named: "think")
+        case "working":
+            characterController?.playAnimation(named: "talk_gesture")
+        case "attention":
+            characterController?.playAnimation(named: "wave")
+        case "idle":
+            characterController?.stopAnimation()
+        case "error":
+            characterController?.setExpression(.surprised, blendDuration: 0.2)
+        default:
+            break
+        }
+    }
+
+    private func handleAmbientNotification(text: String, urgency: String) {
+        guard urgency == "high" || !isProcessing else { return }
+        Task {
+            await sendProactiveMessage(prompt: text)
+        }
     }
 
     /// Format the current date/time in a human-readable string for the active language.
@@ -736,6 +796,9 @@ final class ConversationController: ObservableObject {
         }
         notificationTask?.cancel()
         notificationTask = nil
+
+        agentStateListenerTask?.cancel()
+        agentStateListenerTask = nil
 
         processingTask?.cancel()
         processingTask = nil
