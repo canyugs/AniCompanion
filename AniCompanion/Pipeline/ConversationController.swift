@@ -684,19 +684,33 @@ final class ConversationController: ObservableObject {
             }
 
             Log.pipeline("[Pipeline] Total parsed sentences: \(sentences.count)")
-            guard !sentences.isEmpty else {
-                Log.pipeline("[Pipeline] No sentences parsed — skipping TTS")
+            let speechSentences = Self.makeSpeechSentences(from: sentences)
+            Log.pipeline("[Pipeline] Speakable sentences after filtering: \(speechSentences.count)")
+            guard !speechSentences.isEmpty else {
+                Log.pipeline("[Pipeline] No speakable sentences parsed — skipping TTS")
                 return
             }
 
-            if let lastEmotion = sentences.last?.emotion {
+            if let lastEmotion = speechSentences.last?.emotion {
                 charController?.setExpression(lastEmotion, blendDuration: 0.3)
             }
 
             charController?.playAnimation(named: "talk_gesture")
 
-            Log.pipeline("[Pipeline] Starting TTS for \(sentences.count) sentences")
-            let capturedSentences = sentences
+            if case let .pcm16(sampleRate, channels) = ttsService.outputFormat {
+                try await runPCMStreamingPlayback(
+                    sentences: speechSentences,
+                    sampleRate: sampleRate,
+                    channels: channels,
+                    charController: charController
+                )
+                charController?.stopAnimation()
+                Log.pipeline("[Pipeline] Streaming TTS+playback complete")
+                return
+            }
+
+            Log.pipeline("[Pipeline] Starting TTS for \(speechSentences.count) sentences")
+            let capturedSentences = speechSentences
             try await withThrowingTaskGroup(of: Void.self) { group in
                 let ttsService = self.ttsService
 
@@ -716,7 +730,7 @@ final class ConversationController: ObservableObject {
                             text: sentence.text,
                             emotion: sentence.emotion
                         )
-                        for try await chunk in ttsStream {
+                        for try await chunk in ttsStream.chunks {
                             try Task.checkCancellation()
                             audioData.append(chunk)
                         }
@@ -756,6 +770,181 @@ final class ConversationController: ObservableObject {
         } catch {
             charController?.stopAnimation()
             Log.pipeline("[Pipeline] TTS/playback error (non-fatal): \(error.localizedDescription)")
+        }
+    }
+
+    private static func makeSpeechSentences(from sentences: [SentenceChunk]) -> [SentenceChunk] {
+        var isInsideCodeBlock = false
+        return sentences.compactMap { sentence in
+            let speechText = speechText(
+                from: sentence.text,
+                isInsideCodeBlock: &isInsideCodeBlock
+            )
+            guard !speechText.isEmpty else { return nil }
+            return SentenceChunk(text: speechText, emotion: sentence.emotion)
+        }
+    }
+
+    private static func speechText(from text: String, isInsideCodeBlock: inout Bool) -> String {
+        let lines = text.components(separatedBy: .newlines)
+        let speakableLines = lines.compactMap { rawLine -> String? in
+            let lineWithoutCode = removeFencedCode(from: rawLine, isInsideCodeBlock: &isInsideCodeBlock)
+            let trimmed = lineWithoutCode.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            guard !shouldSkipSpeechLine(trimmed) else { return nil }
+
+            let cleaned = markdownToSpeechText(trimmed)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty, !isLikelyCodeLine(cleaned) else { return nil }
+            return cleaned
+        }
+
+        return speakableLines
+            .joined(separator: " ")
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func removeFencedCode(from line: String, isInsideCodeBlock: inout Bool) -> String {
+        var remaining = line
+        var output = ""
+
+        while let fenceRange = firstCodeFenceRange(in: remaining) {
+            if !isInsideCodeBlock {
+                output += remaining[..<fenceRange.lowerBound]
+            }
+            isInsideCodeBlock.toggle()
+            remaining = String(remaining[fenceRange.upperBound...])
+        }
+
+        if !isInsideCodeBlock {
+            output += remaining
+        }
+
+        return output
+    }
+
+    private static func firstCodeFenceRange(in text: String) -> Range<String.Index>? {
+        let backtickRange = text.range(of: "```")
+        let tildeRange = text.range(of: "~~~")
+
+        switch (backtickRange, tildeRange) {
+        case let (backtick?, tilde?):
+            return backtick.lowerBound < tilde.lowerBound ? backtick : tilde
+        case let (backtick?, nil):
+            return backtick
+        case let (nil, tilde?):
+            return tilde
+        case (nil, nil):
+            return nil
+        }
+    }
+
+    private static func shouldSkipSpeechLine(_ line: String) -> Bool {
+        let normalized = line
+            .replacingOccurrences(of: "`", with: "")
+            .replacingOccurrences(of: "✅", with: "")
+            .replacingOccurrences(of: "✔", with: "")
+            .replacingOccurrences(of: "✓", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let lowercased = normalized.lowercased()
+        if lowercased == "toolsearch" || lowercased == "tool search" {
+            return true
+        }
+
+        if line.contains("✅"),
+           lowercased.contains("tool"),
+           normalized.count <= 48 {
+            return true
+        }
+
+        if lowercased.range(
+            of: #"^(tool|toolsearch|tool search|websearch|web search)\s*(started|running|done|completed|success|ok)?$"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+
+        return false
+    }
+
+    private static func markdownToSpeechText(_ text: String) -> String {
+        var cleaned = text
+        cleaned = cleaned.replacingOccurrences(
+            of: #"^\s{0,3}#{1,6}\s*"#,
+            with: "",
+            options: .regularExpression
+        )
+        cleaned = cleaned.replacingOccurrences(
+            of: #"^\s*(?:[-*+]|\d+[.)])\s+"#,
+            with: "",
+            options: .regularExpression
+        )
+        cleaned = cleaned.replacingOccurrences(
+            of: #"`([^`]*)`"#,
+            with: "$1",
+            options: .regularExpression
+        )
+        cleaned = cleaned.replacingOccurrences(of: "**", with: "")
+        cleaned = cleaned.replacingOccurrences(of: "__", with: "")
+        cleaned = cleaned.replacingOccurrences(of: "*", with: "")
+        return cleaned
+    }
+
+    private static func isLikelyCodeLine(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        let codePatterns = [
+            #"^(fn|func|def|class|struct|enum|import|use|package|let|var|const)\b"#,
+            #"^(println!|print\(|console\.log|return\b|if\s*\(|for\s*\(|while\s*\()"#,
+            #"^[{}\[\]();,]+$"#,
+            #"^\$\s+\S+"#
+        ]
+
+        for pattern in codePatterns {
+            if trimmed.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private func runPCMStreamingPlayback(
+        sentences: [SentenceChunk],
+        sampleRate: Double,
+        channels: Int,
+        charController: (any CharacterControllerProtocol)?
+    ) async throws {
+        Log.pipeline("[Pipeline] Starting streaming PCM TTS for \(sentences.count) sentences")
+        isSpeaking = true
+        defer {
+            isSpeaking = false
+            charController?.setMouthOpen(0)
+        }
+
+        for (index, sentence) in sentences.enumerated() {
+            try Task.checkCancellation()
+
+            charController?.setExpression(sentence.emotion, blendDuration: 0.3)
+            Log.pipeline("[Pipeline] Streaming TTS[\(index)] synthesizing: \"\(sentence.text)\"")
+
+            let ttsStream = ttsService.synthesize(
+                text: sentence.text,
+                emotion: sentence.emotion
+            )
+
+            guard case .pcm16 = ttsStream.format else {
+                throw AudioPlayerError.playbackFailed("TTS stream format changed while streaming playback was active.")
+            }
+
+            try await audioPlayer.playPCM16Stream(
+                ttsStream.chunks,
+                sampleRate: sampleRate,
+                channels: channels
+            )
         }
     }
 

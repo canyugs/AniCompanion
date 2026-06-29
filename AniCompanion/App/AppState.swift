@@ -29,6 +29,20 @@ final class AppState: ObservableObject {
     /// The TTS voice ID used for speech synthesis.
     @AppStorage("tts_voice_id") var ttsVoiceID: String = "Chinese (Mandarin)_Crisp_Girl"
 
+    /// Which TTS provider to use. See `TTSProvider`.
+    @AppStorage(TTSProvider.storageKey) var ttsProvider: String = TTSProvider.miniMax.rawValue
+
+    /// OpenAI TTS settings.
+    @AppStorage("openai_tts_api_key") var openAITTSAPIKey: String = ""
+    @AppStorage("openai_tts_model") var openAITTSModel: String = "gpt-4o-mini-tts"
+    @AppStorage("openai_tts_voice") var openAITTSVoice: String = "coral"
+    @AppStorage("openai_tts_instructions") var openAITTSInstructions: String = "Speak warmly and expressively, like a friendly anime companion."
+
+    /// Groq TTS settings.
+    @AppStorage("groq_tts_api_key") var groqTTSAPIKey: String = ""
+    @AppStorage("groq_tts_model") var groqTTSModel: String = "canopylabs/orpheus-v1-english"
+    @AppStorage("groq_tts_voice") var groqTTSVoice: String = "troy"
+
     /// Whether TTS voice output is enabled. When disabled, 小光 responds with text only.
     @AppStorage("tts_enabled") var ttsEnabled: Bool = true
 
@@ -122,9 +136,17 @@ final class AppState: ObservableObject {
             .assign(to: \.isConnected, on: self)
 
         let ttsService = TTSService(
-            apiKey: minimaxAPIKey,
-            groupId: minimaxGroupID,
-            voiceId: ttsVoiceID
+            provider: TTSProvider.current,
+            miniMaxAPIKey: minimaxAPIKey,
+            miniMaxGroupID: minimaxGroupID,
+            miniMaxVoiceID: ttsVoiceID,
+            openAIAPIKey: openAITTSAPIKey,
+            openAIModel: openAITTSModel,
+            openAIVoice: openAITTSVoice,
+            openAIInstructions: openAITTSInstructions,
+            groqAPIKey: groqTTSAPIKey,
+            groqModel: groqTTSModel,
+            groqVoice: groqTTSVoice
         )
 
         let sttService = STTService()
@@ -154,10 +176,10 @@ final class AppState: ObservableObject {
         // Verify gateway reachability (HTTP health check).
         ws.connect()
 
-        // Load the default VRM character model (Alicia Solid).
+        // Load the local VRM character model.
         // The .vrm binary is not committed; run scripts/download-model.sh to fetch it,
         // or drop your own VRM in Resources/VRMModel and change this filename.
-        characterManager.loadModel(named: "AliciaSolid.vrm")
+        characterManager.loadModel(named: "UsadaPekora.vrm")
 
         // Trigger launch greeting after model loads.
         controller.triggerLaunchGreeting()

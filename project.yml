@@ -23,6 +23,7 @@ targets:
           - "Resources/Animations/**"
           - "Resources/ThreeVRM/**"
           - "Resources/Persona/**"
+          - "Resources/VRMModel/**"
 
       # VRM model resources as a folder reference
       - path: AniCompanion/Resources/VRMModel

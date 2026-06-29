@@ -11,6 +11,7 @@ enum TTSError: LocalizedError {
     case apiError(statusCode: Int, message: String)
     case emptyText
     case unauthorized
+    case missingCredentials(String)
 
     var errorDescription: String? {
         switch self {
@@ -29,31 +30,111 @@ enum TTSError: LocalizedError {
         case .emptyText:
             return "Cannot synthesize empty text."
         case .unauthorized:
-            return "Invalid or missing MiniMax API key."
+            return "Invalid or missing TTS API key."
+        case .missingCredentials(let provider):
+            return "\(provider) TTS is selected but its required credentials are missing."
         }
+    }
+}
+
+// MARK: - Provider
+
+enum TTSProvider: String, CaseIterable, Identifiable, Sendable {
+    case miniMax
+    case openAI
+    case groq
+
+    var id: String { rawValue }
+
+    static let storageKey = "tts_provider"
+
+    var displayName: String {
+        switch self {
+        case .miniMax: return "MiniMax"
+        case .openAI: return "OpenAI"
+        case .groq: return "Groq"
+        }
+    }
+
+    static var current: TTSProvider {
+        if let raw = UserDefaults.standard.string(forKey: storageKey),
+           let provider = TTSProvider(rawValue: raw) {
+            return provider
+        }
+        return .miniMax
     }
 }
 
 // MARK: - Protocol
 
+struct TTSAudioStream: @unchecked Sendable {
+    enum Format: Sendable, Equatable {
+        case encoded
+        case pcm16(sampleRate: Double, channels: Int)
+    }
+
+    let format: Format
+    let chunks: AsyncThrowingStream<Data, Error>
+}
+
 protocol TTSServiceProtocol: Sendable {
-    func synthesize(text: String, emotion: Emotion) -> AsyncThrowingStream<Data, Error>
+    var outputFormat: TTSAudioStream.Format { get }
+
+    func synthesize(text: String, emotion: Emotion) -> TTSAudioStream
 }
 
 // MARK: - Implementation
 
 final class TTSService: TTSServiceProtocol, Sendable {
-    private let apiKey: String
-    private let groupId: String
-    private let voiceId: String
-    private let model: String
+    private let provider: TTSProvider
+    private let miniMaxAPIKey: String
+    private let miniMaxGroupID: String
+    private let miniMaxVoiceID: String
+    private let miniMaxModel: String
+    private let openAIAPIKey: String
+    private let openAIModel: String
+    private let openAIVoice: String
+    private let openAIInstructions: String
+    private let groqAPIKey: String
+    private let groqModel: String
+    private let groqVoice: String
     private let session: URLSession
 
-    init(apiKey: String, groupId: String, voiceId: String = "Chinese (Mandarin)_Crisp_Girl", model: String = "speech-02-turbo") {
-        self.apiKey = apiKey
-        self.groupId = groupId
-        self.voiceId = voiceId
-        self.model = model
+    var outputFormat: TTSAudioStream.Format {
+        switch provider {
+        case .openAI:
+            return .pcm16(sampleRate: 24_000, channels: 1)
+        case .miniMax, .groq:
+            return .encoded
+        }
+    }
+
+    init(
+        provider: TTSProvider = .miniMax,
+        miniMaxAPIKey: String,
+        miniMaxGroupID: String,
+        miniMaxVoiceID: String = "Chinese (Mandarin)_Crisp_Girl",
+        miniMaxModel: String = "speech-02-turbo",
+        openAIAPIKey: String = "",
+        openAIModel: String = "gpt-4o-mini-tts",
+        openAIVoice: String = "coral",
+        openAIInstructions: String = "Speak warmly and expressively, like a friendly anime companion.",
+        groqAPIKey: String = "",
+        groqModel: String = "canopylabs/orpheus-v1-english",
+        groqVoice: String = "troy"
+    ) {
+        self.provider = provider
+        self.miniMaxAPIKey = miniMaxAPIKey
+        self.miniMaxGroupID = miniMaxGroupID
+        self.miniMaxVoiceID = miniMaxVoiceID
+        self.miniMaxModel = miniMaxModel
+        self.openAIAPIKey = openAIAPIKey
+        self.openAIModel = openAIModel
+        self.openAIVoice = openAIVoice
+        self.openAIInstructions = openAIInstructions
+        self.groqAPIKey = groqAPIKey
+        self.groqModel = groqModel
+        self.groqVoice = groqVoice
 
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 60
@@ -61,8 +142,9 @@ final class TTSService: TTSServiceProtocol, Sendable {
         self.session = URLSession(configuration: configuration)
     }
 
-    func synthesize(text: String, emotion: Emotion) -> AsyncThrowingStream<Data, Error> {
-        AsyncThrowingStream { continuation in
+    func synthesize(text: String, emotion: Emotion) -> TTSAudioStream {
+        let format = outputFormat
+        let chunks = AsyncThrowingStream<Data, Error> { continuation in
             let task = Task {
                 do {
                     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -70,117 +152,16 @@ final class TTSService: TTSServiceProtocol, Sendable {
                         return
                     }
 
-                    let request = try buildRequest(text: text, emotion: emotion)
-                    let (bytes, response) = try await session.bytes(for: request)
-
-                    guard let httpResponse = response as? HTTPURLResponse else {
-                        continuation.finish(throwing: TTSError.invalidResponse)
-                        return
+                    switch provider {
+                    case .miniMax:
+                        try await synthesizeMiniMax(text: text, emotion: emotion, continuation: continuation)
+                    case .openAI:
+                        try await synthesizeOpenAI(text: text, emotion: emotion, continuation: continuation)
+                    case .groq:
+                        let data = try await synthesizeGroq(text: text, emotion: emotion)
+                        continuation.yield(data)
+                        continuation.finish()
                     }
-
-
-                    guard httpResponse.statusCode == 200 else {
-                        var errorBody = ""
-                        for try await line in bytes.lines {
-                            errorBody += line
-                            if errorBody.count > 2000 { break }
-                        }
-
-                        if httpResponse.statusCode == 401 {
-                            continuation.finish(throwing: TTSError.unauthorized)
-                        } else {
-                            continuation.finish(throwing: TTSError.requestFailed(
-                                statusCode: httpResponse.statusCode,
-                                body: errorBody
-                            ))
-                        }
-                        return
-                    }
-
-                    var lineCount = 0
-                    for try await line in bytes.lines {
-                        lineCount += 1
-
-                        // // Log first few lines for debugging.
-                        // if lineCount <= 3 {
-                        //     let preview = line.prefix(200)
-                        // }
-
-                        // Skip empty lines.
-                        let trimmedLine = line.trimmingCharacters(in: .whitespaces)
-                        guard !trimmedLine.isEmpty else { continue }
-
-                        // Handle non-SSE error responses (plain JSON without "data:" prefix).
-                        if trimmedLine.hasPrefix("{"), !trimmedLine.hasPrefix("data:") {
-                            if let jsonData = trimmedLine.data(using: .utf8),
-                               let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
-                               let baseResp = json["base_resp"] as? [String: Any],
-                               let statusCode = baseResp["status_code"] as? Int,
-                               statusCode != 0 {
-                                let message = baseResp["status_msg"] as? String ?? "Unknown error"
-                                continuation.finish(throwing: TTSError.apiError(
-                                    statusCode: statusCode,
-                                    message: message
-                                ))
-                                return
-                            }
-                            continue
-                        }
-
-                        // Skip non-SSE lines.
-                        guard trimmedLine.hasPrefix("data:") else { continue }
-
-                        // Handle both "data: {...}" and "data:{...}" formats.
-                        let payload: String
-                        if line.hasPrefix("data: ") {
-                            payload = String(line.dropFirst(6))
-                        } else {
-                            payload = String(line.dropFirst(5))
-                        }
-
-                        guard let jsonData = payload.data(using: .utf8),
-                              let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
-                            continue
-                        }
-
-                        // Check for API-level errors in base_resp.
-                        if let baseResp = json["base_resp"] as? [String: Any],
-                           let statusCode = baseResp["status_code"] as? Int,
-                           statusCode != 0 {
-                            let message = baseResp["status_msg"] as? String ?? "Unknown error"
-                            continuation.finish(throwing: TTSError.apiError(
-                                statusCode: statusCode,
-                                message: message
-                            ))
-                            return
-                        }
-
-                        // MiniMax streaming T2A v2 sends incremental audio chunks, then
-                        // a final event containing the COMPLETE audio. The final event
-                        // has "extra_info" at the top level. Skip it to avoid doubling.
-                        if json["extra_info"] != nil {
-                            continue
-                        }
-
-                        // Extract hex-encoded audio from data.audio.
-                        guard let dataObject = json["data"] as? [String: Any],
-                              let hexString = dataObject["audio"] as? String else {
-                            continue
-                        }
-
-                        // Skip empty audio chunks (final event may have empty audio).
-                        guard !hexString.isEmpty else { continue }
-
-                        // Decode hex string to raw MP3 bytes.
-                        guard let audioData = Data(hexString: hexString) else {
-                            continuation.finish(throwing: TTSError.invalidHexData)
-                            return
-                        }
-
-                        continuation.yield(audioData)
-                    }
-
-                    continuation.finish()
                 } catch is CancellationError {
                     continuation.finish()
                 } catch {
@@ -192,12 +173,105 @@ final class TTSService: TTSServiceProtocol, Sendable {
                 task.cancel()
             }
         }
+        return TTSAudioStream(format: format, chunks: chunks)
     }
 
-    // MARK: - Private Helpers
+    // MARK: - MiniMax
 
-    private func buildRequest(text: String, emotion: Emotion) throws -> URLRequest {
-        let urlString = "https://api.minimax.io/v1/t2a_v2"
+    private func synthesizeMiniMax(
+        text: String,
+        emotion: Emotion,
+        continuation: AsyncThrowingStream<Data, Error>.Continuation
+    ) async throws {
+        guard !miniMaxAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !miniMaxGroupID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw TTSError.missingCredentials("MiniMax")
+        }
+
+        let request = try buildMiniMaxRequest(text: text, emotion: emotion)
+        let (bytes, response) = try await session.bytes(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw TTSError.invalidResponse
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            var errorBody = ""
+            for try await line in bytes.lines {
+                errorBody += line
+                if errorBody.count > 2000 { break }
+            }
+
+            if httpResponse.statusCode == 401 {
+                throw TTSError.unauthorized
+            }
+            throw TTSError.requestFailed(statusCode: httpResponse.statusCode, body: errorBody)
+        }
+
+        for try await line in bytes.lines {
+            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmedLine.isEmpty else { continue }
+
+            // Handle non-SSE error responses (plain JSON without "data:" prefix).
+            if trimmedLine.hasPrefix("{"), !trimmedLine.hasPrefix("data:") {
+                if let jsonData = trimmedLine.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                   let baseResp = json["base_resp"] as? [String: Any],
+                   let statusCode = baseResp["status_code"] as? Int,
+                   statusCode != 0 {
+                    let message = baseResp["status_msg"] as? String ?? "Unknown error"
+                    throw TTSError.apiError(statusCode: statusCode, message: message)
+                }
+                continue
+            }
+
+            guard trimmedLine.hasPrefix("data:") else { continue }
+
+            // Handle both "data: {...}" and "data:{...}" formats.
+            let payload: String
+            if line.hasPrefix("data: ") {
+                payload = String(line.dropFirst(6))
+            } else {
+                payload = String(line.dropFirst(5))
+            }
+
+            guard let jsonData = payload.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+                continue
+            }
+
+            if let baseResp = json["base_resp"] as? [String: Any],
+               let statusCode = baseResp["status_code"] as? Int,
+               statusCode != 0 {
+                let message = baseResp["status_msg"] as? String ?? "Unknown error"
+                throw TTSError.apiError(statusCode: statusCode, message: message)
+            }
+
+            // MiniMax streaming T2A v2 sends incremental audio chunks, then
+            // a final event containing the COMPLETE audio. The final event
+            // has "extra_info" at the top level. Skip it to avoid doubling.
+            if json["extra_info"] != nil {
+                continue
+            }
+
+            guard let dataObject = json["data"] as? [String: Any],
+                  let hexString = dataObject["audio"] as? String,
+                  !hexString.isEmpty else {
+                continue
+            }
+
+            guard let audioData = Data(hexString: hexString) else {
+                throw TTSError.invalidHexData
+            }
+
+            continuation.yield(audioData)
+        }
+
+        continuation.finish()
+    }
+
+    private func buildMiniMaxRequest(text: String, emotion: Emotion) throws -> URLRequest {
+        let urlString = "https://api.minimax.io/v1/t2a_v2?GroupId=\(miniMaxGroupID)"
         guard let url = URL(string: urlString) else {
             throw TTSError.invalidURL
         }
@@ -205,23 +279,21 @@ final class TTSService: TTSServiceProtocol, Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(miniMaxAPIKey)", forHTTPHeaderField: "Authorization")
 
-        // Build voice_setting.
         var voiceSetting: [String: Any] = [
-            "voice_id": voiceId,
+            "voice_id": miniMaxVoiceID,
             "speed": 1.0
         ]
 
-        // When an emotion category is available, add timber_weights for emotional voice.
         if emotion.ttsEmotionCategory != nil {
             voiceSetting["timber_weights"] = [
-                ["timber_id": voiceId, "weight": 100]
+                ["timber_id": miniMaxVoiceID, "weight": 100]
             ]
         }
 
         let body: [String: Any] = [
-            "model": model,
+            "model": miniMaxModel,
             "text": text,
             "stream": true,
             "voice_setting": voiceSetting,
@@ -234,6 +306,176 @@ final class TTSService: TTSServiceProtocol, Sendable {
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return request
+    }
+
+    // MARK: - OpenAI
+
+    private func synthesizeOpenAI(
+        text: String,
+        emotion: Emotion,
+        continuation: AsyncThrowingStream<Data, Error>.Continuation
+    ) async throws {
+        guard !openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw TTSError.missingCredentials("OpenAI")
+        }
+
+        guard let url = URL(string: "https://api.openai.com/v1/audio/speech") else {
+            throw TTSError.invalidURL
+        }
+
+        var body: [String: Any] = [
+            "model": openAIModel,
+            "input": text,
+            "voice": openAIVoice,
+            "response_format": "pcm"
+        ]
+
+        let instructions = openAIInstructionsForRequest(emotion: emotion)
+        if !instructions.isEmpty {
+            body["instructions"] = instructions
+        }
+
+        var request = try buildJSONRequest(url: url, apiKey: openAIAPIKey, body: body)
+        request.setValue("audio/pcm", forHTTPHeaderField: "Accept")
+
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw TTSError.invalidResponse
+        }
+        guard httpResponse.statusCode == 200 else {
+            if httpResponse.statusCode == 401 {
+                throw TTSError.unauthorized
+            }
+            let body = try await readErrorBody(from: bytes)
+            throw TTSError.requestFailed(statusCode: httpResponse.statusCode, body: body)
+        }
+
+        var audioChunk = Data()
+        audioChunk.reserveCapacity(8192)
+
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            audioChunk.append(byte)
+            if audioChunk.count >= 8192 {
+                continuation.yield(audioChunk)
+                audioChunk.removeAll(keepingCapacity: true)
+            }
+        }
+
+        if !audioChunk.isEmpty {
+            continuation.yield(audioChunk)
+        }
+
+        continuation.finish()
+    }
+
+    private func openAIInstructionsForRequest(emotion: Emotion) -> String {
+        var parts = [openAIInstructions.trimmingCharacters(in: .whitespacesAndNewlines)]
+        if emotion != .neutral {
+            parts.append("Current emotional tone: \(emotion.rawValue).")
+        }
+        return parts.filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    // MARK: - Groq
+
+    private func synthesizeGroq(text: String, emotion: Emotion) async throws -> Data {
+        guard !groqAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw TTSError.missingCredentials("Groq")
+        }
+
+        guard let url = URL(string: "https://api.groq.com/openai/v1/audio/speech") else {
+            throw TTSError.invalidURL
+        }
+
+        let body: [String: Any] = [
+            "model": groqModel,
+            "input": groqInput(text: text, emotion: emotion),
+            "voice": groqVoice,
+            "response_format": "wav"
+        ]
+
+        return try await fetchSpeechAudio(url: url, apiKey: groqAPIKey, body: body)
+    }
+
+    private func groqInput(text: String, emotion: Emotion) -> String {
+        guard let direction = groqDirection(for: emotion) else {
+            return text
+        }
+        return "[\(direction)] \(text)"
+    }
+
+    private func groqDirection(for emotion: Emotion) -> String? {
+        switch emotion {
+        case .happy, .excited, .love, .proud, .laugh:
+            return "cheerful"
+        case .sad, .pain:
+            return "sad"
+        case .angry, .disgusted:
+            return "angry"
+        case .surprised:
+            return "surprised"
+        case .curious:
+            return "curious"
+        case .shy:
+            return "softly"
+        case .sleepy, .bored:
+            return "calm"
+        case .smirk:
+            return "playful"
+        case .neutral:
+            return nil
+        }
+    }
+
+    // MARK: - Shared HTTP
+
+    private func fetchSpeechAudio(url: URL, apiKey: String, body: [String: Any]) async throws -> Data {
+        let request = try buildJSONRequest(url: url, apiKey: apiKey, body: body)
+
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw TTSError.invalidResponse
+        }
+        guard httpResponse.statusCode == 200 else {
+            if httpResponse.statusCode == 401 {
+                throw TTSError.unauthorized
+            }
+            let body = String(data: data.prefixData(2000), encoding: .utf8) ?? ""
+            throw TTSError.requestFailed(statusCode: httpResponse.statusCode, body: body)
+        }
+
+        return data
+    }
+
+    private func buildJSONRequest(url: URL, apiKey: String, body: [String: Any]) throws -> URLRequest {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        return request
+    }
+
+    private func readErrorBody(from bytes: URLSession.AsyncBytes) async throws -> String {
+        var data = Data()
+        data.reserveCapacity(2000)
+
+        for try await byte in bytes {
+            data.append(byte)
+            if data.count >= 2000 {
+                break
+            }
+        }
+
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+}
+
+private extension Data {
+    func prefixData(_ maxLength: Int) -> Data {
+        guard count > maxLength else { return self }
+        return subdata(in: 0..<maxLength)
     }
 }
 

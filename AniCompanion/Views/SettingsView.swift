@@ -11,6 +11,7 @@ struct SettingsView: View {
 
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
+    @StateObject private var previewAudioPlayer = AudioPlayerService()
 
     // Local copies for edit-then-save workflow.
     @State private var minimaxAPIKey: String = ""
@@ -20,11 +21,22 @@ struct SettingsView: View {
     /// backend's entry the fields show; nothing is persisted until Save.
     @State private var endpoints: [ChatBackend: String] = [:]
     @State private var apiKeys: [ChatBackend: String] = [:]
+    @State private var ttsProvider: TTSProvider = .miniMax
     @State private var ttsVoiceID: String = "Chinese (Mandarin)_Crisp_Girl"
     @State private var ttsEnabled: Bool = true
+    @State private var openAITTSAPIKey: String = ""
+    @State private var openAITTSModel: String = "gpt-4o-mini-tts"
+    @State private var openAITTSVoice: String = "coral"
+    @State private var openAITTSInstructions: String = "Speak warmly and expressively, like a friendly anime companion."
+    @State private var groqTTSAPIKey: String = ""
+    @State private var groqTTSModel: String = "canopylabs/orpheus-v1-english"
+    @State private var groqTTSVoice: String = "troy"
     @State private var language: AppLanguage = .english
     @State private var tier2Enabled: Bool = false
     @State private var tier2Endpoint: String = "http://127.0.0.1:9100"
+    @State private var isVoicePreviewing = false
+    @State private var voicePreviewError: String?
+    @State private var voicePreviewTask: Task<Void, Never>?
 
     /// Shows the "restart to apply UI language" alert after a language change.
     @State private var showRestartAlert = false
@@ -105,34 +117,33 @@ struct SettingsView: View {
 
                     SettingsSection(title: "API Keys", icon: "key.fill") {
                         VStack(alignment: .leading, spacing: 14) {
-                            SettingsField(label: "MiniMax API Key") {
-                                SecureField("eyJ...", text: $minimaxAPIKey)
-                                    .textFieldStyle(.plain)
-                                    .font(.system(size: 13, design: .monospaced))
-                                    .padding(8)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .fill(Color.white.opacity(0.06))
-                                    )
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                                    )
+                            SettingsField(label: "TTS Provider") {
+                                Picker("", selection: $ttsProvider) {
+                                    ForEach(TTSProvider.allCases) { provider in
+                                        Text(provider.displayName).tag(provider)
+                                    }
+                                }
+                                .pickerStyle(.segmented)
+                                .labelsHidden()
                             }
 
-                            SettingsField(label: "MiniMax Group ID") {
-                                TextField("Group ID", text: $minimaxGroupID)
-                                    .textFieldStyle(.plain)
-                                    .font(.system(size: 13, design: .monospaced))
-                                    .padding(8)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .fill(Color.white.opacity(0.06))
-                                    )
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
-                                    )
+                            switch ttsProvider {
+                            case .miniMax:
+                                SettingsField(label: "MiniMax API Key") {
+                                    settingsTextField("eyJ...", text: $minimaxAPIKey, secure: true)
+                                }
+
+                                SettingsField(label: "MiniMax Group ID") {
+                                    settingsTextField("Group ID", text: $minimaxGroupID)
+                                }
+                            case .openAI:
+                                SettingsField(label: "OpenAI API Key") {
+                                    settingsTextField("sk-...", text: $openAITTSAPIKey, secure: true)
+                                }
+                            case .groq:
+                                SettingsField(label: "Groq API Key") {
+                                    settingsTextField("gsk_...", text: $groqTTSAPIKey, secure: true)
+                                }
                             }
                         }
                     }
@@ -144,20 +155,46 @@ struct SettingsView: View {
                             Toggle("Enable TTS Voice", isOn: $ttsEnabled)
                                 .toggleStyle(.switch)
 
-                            SettingsField(label: "TTS Voice ID") {
-                                TextField("Voice ID", text: $ttsVoiceID)
-                                    .textFieldStyle(.plain)
-                                    .font(.system(size: 13, design: .monospaced))
-                                    .padding(8)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .fill(Color.white.opacity(0.06))
+                            switch ttsProvider {
+                            case .miniMax:
+                                SettingsField(label: "TTS Voice ID") {
+                                    voiceSelector(
+                                        placeholder: "Chinese (Mandarin)_Crisp_Girl",
+                                        selection: $ttsVoiceID,
+                                        options: miniMaxVoiceOptions
                                     )
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                                }
+                            case .openAI:
+                                SettingsField(label: "OpenAI Model") {
+                                    settingsTextField("gpt-4o-mini-tts", text: $openAITTSModel)
+                                }
+
+                                SettingsField(label: "OpenAI Voice") {
+                                    voiceSelector(
+                                        placeholder: "coral",
+                                        selection: $openAITTSVoice,
+                                        options: openAIVoiceOptions
                                     )
+                                }
+
+                                SettingsField(label: "Voice Instructions") {
+                                    settingsTextField("Speak warmly and expressively...", text: $openAITTSInstructions)
+                                }
+                            case .groq:
+                                SettingsField(label: "Groq Model") {
+                                    settingsTextField("canopylabs/orpheus-v1-english", text: $groqTTSModel)
+                                }
+
+                                SettingsField(label: "Groq Voice") {
+                                    voiceSelector(
+                                        placeholder: "troy",
+                                        selection: $groqTTSVoice,
+                                        options: groqVoiceOptions(for: groqTTSModel)
+                                    )
+                                }
                             }
+
+                            voicePreviewControls
                         }
                     }
 
@@ -247,6 +284,13 @@ struct SettingsView: View {
         .onAppear {
             loadSettings()
         }
+        .onDisappear {
+            stopVoicePreview()
+        }
+        .onChange(of: ttsProvider) { _, _ in
+            stopVoicePreview()
+            voicePreviewError = nil
+        }
         .alert("Restart required", isPresented: $showRestartAlert) {
             Button("OK") { dismiss() }
         } message: {
@@ -272,6 +316,224 @@ struct SettingsView: View {
         )
     }
 
+    private var voicePreviewControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Button {
+                    if isVoicePreviewing {
+                        stopVoicePreview()
+                    } else {
+                        startVoicePreview()
+                    }
+                } label: {
+                    Label(
+                        isVoicePreviewing ? "Stop Preview" : "Preview Voice",
+                        systemImage: isVoicePreviewing ? "stop.fill" : "play.fill"
+                    )
+                }
+                .buttonStyle(.bordered)
+                .disabled(!canPreviewVoice && !isVoicePreviewing)
+
+                if isVoicePreviewing {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+
+            if !canPreviewVoice {
+                Text(previewCredentialHint)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.4))
+            }
+
+            if let voicePreviewError {
+                Text(voicePreviewError)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red.opacity(0.85))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var canPreviewVoice: Bool {
+        switch ttsProvider {
+        case .miniMax:
+            return !minimaxAPIKey.trimmed.isEmpty && !minimaxGroupID.trimmed.isEmpty
+        case .openAI:
+            return !openAITTSAPIKey.trimmed.isEmpty
+        case .groq:
+            return !groqTTSAPIKey.trimmed.isEmpty
+        }
+    }
+
+    private var previewCredentialHint: String {
+        switch ttsProvider {
+        case .miniMax:
+            return "Enter MiniMax API Key and Group ID to preview."
+        case .openAI:
+            return "Enter OpenAI API Key to preview."
+        case .groq:
+            return "Enter Groq API Key to preview."
+        }
+    }
+
+    private var previewSampleText: String {
+        switch language {
+        case .english:
+            return "Hi, I am Xiaoguang. This is a quick voice preview."
+        case .traditionalChinese:
+            return "嗨，我是小光。這是目前聲音的快速試聽。"
+        }
+    }
+
+    @ViewBuilder
+    private func settingsTextField(_ placeholder: String, text: Binding<String>, secure: Bool = false) -> some View {
+        if secure {
+            SecureField(placeholder, text: text)
+                .settingsFieldChrome()
+        } else {
+            TextField(placeholder, text: text)
+                .settingsFieldChrome()
+        }
+    }
+
+    private func voiceSelector(
+        placeholder: String,
+        selection: Binding<String>,
+        options: [TTSVoiceOption]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("", selection: selection) {
+                ForEach(optionsIncludingCurrent(options, current: selection.wrappedValue)) { option in
+                    Text(option.menuTitle).tag(option.id)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+
+            settingsTextField(placeholder, text: selection)
+        }
+    }
+
+    private func optionsIncludingCurrent(_ options: [TTSVoiceOption], current: String) -> [TTSVoiceOption] {
+        let current = current.trimmed
+        guard !current.isEmpty, !options.contains(where: { $0.id == current }) else {
+            return options
+        }
+        return [TTSVoiceOption(id: current, name: current, detail: "Custom")] + options
+    }
+
+    private var miniMaxVoiceOptions: [TTSVoiceOption] {
+        [
+            TTSVoiceOption(id: "Chinese (Mandarin)_Crisp_Girl", name: "Crisp Girl", detail: "Mandarin")
+        ]
+    }
+
+    private var openAIVoiceOptions: [TTSVoiceOption] {
+        [
+            TTSVoiceOption(id: "coral", name: "Coral", detail: "Warm"),
+            TTSVoiceOption(id: "marin", name: "Marin", detail: "Recommended"),
+            TTSVoiceOption(id: "cedar", name: "Cedar", detail: "Recommended"),
+            TTSVoiceOption(id: "nova", name: "Nova", detail: "Bright"),
+            TTSVoiceOption(id: "shimmer", name: "Shimmer", detail: "Soft"),
+            TTSVoiceOption(id: "sage", name: "Sage", detail: "Calm"),
+            TTSVoiceOption(id: "alloy", name: "Alloy", detail: "Neutral"),
+            TTSVoiceOption(id: "ash", name: "Ash", detail: "Clear"),
+            TTSVoiceOption(id: "ballad", name: "Ballad", detail: "Expressive"),
+            TTSVoiceOption(id: "echo", name: "Echo", detail: "Narration"),
+            TTSVoiceOption(id: "fable", name: "Fable", detail: "Story"),
+            TTSVoiceOption(id: "onyx", name: "Onyx", detail: "Deep"),
+            TTSVoiceOption(id: "verse", name: "Verse", detail: "Expressive")
+        ]
+    }
+
+    private func groqVoiceOptions(for model: String) -> [TTSVoiceOption] {
+        if model.contains("arabic") {
+            return [
+                TTSVoiceOption(id: "noura", name: "Noura", detail: "Arabic, female"),
+                TTSVoiceOption(id: "lulwa", name: "Lulwa", detail: "Arabic, female"),
+                TTSVoiceOption(id: "aisha", name: "Aisha", detail: "Arabic, female"),
+                TTSVoiceOption(id: "abdullah", name: "Abdullah", detail: "Arabic, male"),
+                TTSVoiceOption(id: "fahad", name: "Fahad", detail: "Arabic, male"),
+                TTSVoiceOption(id: "sultan", name: "Sultan", detail: "Arabic, male")
+            ]
+        }
+
+        return [
+            TTSVoiceOption(id: "hannah", name: "Hannah", detail: "Female"),
+            TTSVoiceOption(id: "autumn", name: "Autumn", detail: "Female"),
+            TTSVoiceOption(id: "diana", name: "Diana", detail: "Female"),
+            TTSVoiceOption(id: "troy", name: "Troy", detail: "Male"),
+            TTSVoiceOption(id: "austin", name: "Austin", detail: "Male"),
+            TTSVoiceOption(id: "daniel", name: "Daniel", detail: "Male")
+        ]
+    }
+
+    private func startVoicePreview() {
+        guard canPreviewVoice else { return }
+
+        voicePreviewTask?.cancel()
+        previewAudioPlayer.stop()
+        voicePreviewError = nil
+        isVoicePreviewing = true
+
+        let service = TTSService(
+            provider: ttsProvider,
+            miniMaxAPIKey: minimaxAPIKey,
+            miniMaxGroupID: minimaxGroupID,
+            miniMaxVoiceID: ttsVoiceID,
+            openAIAPIKey: openAITTSAPIKey,
+            openAIModel: openAITTSModel,
+            openAIVoice: openAITTSVoice,
+            openAIInstructions: openAITTSInstructions,
+            groqAPIKey: groqTTSAPIKey,
+            groqModel: groqTTSModel,
+            groqVoice: groqTTSVoice
+        )
+        let sampleText = previewSampleText
+        let player = previewAudioPlayer
+
+        voicePreviewTask = Task { @MainActor in
+            do {
+                let stream = service.synthesize(text: sampleText, emotion: .happy)
+                try await playPreviewStream(stream, using: player)
+            } catch is CancellationError {
+                // Stopping preview is user-driven and should not surface as an error.
+            } catch {
+                voicePreviewError = error.localizedDescription
+            }
+
+            if !Task.isCancelled {
+                isVoicePreviewing = false
+                voicePreviewTask = nil
+            }
+        }
+    }
+
+    private func stopVoicePreview() {
+        voicePreviewTask?.cancel()
+        voicePreviewTask = nil
+        previewAudioPlayer.stop()
+        isVoicePreviewing = false
+    }
+
+    @MainActor
+    private func playPreviewStream(_ stream: TTSAudioStream, using player: AudioPlayerService) async throws {
+        switch stream.format {
+        case .encoded:
+            var audioData = Data()
+            for try await chunk in stream.chunks {
+                try Task.checkCancellation()
+                audioData.append(chunk)
+            }
+            if !audioData.isEmpty {
+                try await player.playAudioData(audioData)
+            }
+        case let .pcm16(sampleRate, channels):
+            try await player.playPCM16Stream(stream.chunks, sampleRate: sampleRate, channels: channels)
+        }
+    }
+
     // MARK: - Data Flow
 
     /// Load current settings from AppState into local state.
@@ -284,8 +546,16 @@ struct SettingsView: View {
         }
         minimaxAPIKey = appState.minimaxAPIKey
         minimaxGroupID = appState.minimaxGroupID
+        ttsProvider = TTSProvider.current
         ttsVoiceID = appState.ttsVoiceID
         ttsEnabled = appState.ttsEnabled
+        openAITTSAPIKey = appState.openAITTSAPIKey
+        openAITTSModel = appState.openAITTSModel
+        openAITTSVoice = appState.openAITTSVoice
+        openAITTSInstructions = appState.openAITTSInstructions
+        groqTTSAPIKey = appState.groqTTSAPIKey
+        groqTTSModel = appState.groqTTSModel
+        groqTTSVoice = appState.groqTTSVoice
         language = AppLanguage.current
         tier2Enabled = appState.tier2Enabled
         tier2Endpoint = appState.tier2Endpoint
@@ -303,8 +573,16 @@ struct SettingsView: View {
         }
         appState.minimaxAPIKey = minimaxAPIKey
         appState.minimaxGroupID = minimaxGroupID
+        appState.ttsProvider = ttsProvider.rawValue
         appState.ttsVoiceID = ttsVoiceID
         appState.ttsEnabled = ttsEnabled
+        appState.openAITTSAPIKey = openAITTSAPIKey
+        appState.openAITTSModel = openAITTSModel
+        appState.openAITTSVoice = openAITTSVoice
+        appState.openAITTSInstructions = openAITTSInstructions
+        appState.groqTTSAPIKey = groqTTSAPIKey
+        appState.groqTTSModel = groqTTSModel
+        appState.groqTTSVoice = groqTTSVoice
 
         // Persist the language. The character/persona + STT pick it up immediately on
         // reinitialize; the SwiftUI interface needs `AppleLanguages` + a relaunch.
@@ -319,6 +597,18 @@ struct SettingsView: View {
 
         // Recreate services with updated settings.
         appState.reinitializeServices()
+    }
+}
+
+// MARK: - Voice Options
+
+private struct TTSVoiceOption: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let detail: String
+
+    var menuTitle: String {
+        "\(name) — \(id) · \(detail)"
     }
 }
 
@@ -375,6 +665,29 @@ private struct SettingsField<Content: View>: View {
                 .foregroundStyle(.white.opacity(0.7))
             content
         }
+    }
+}
+
+private extension View {
+    func settingsFieldChrome() -> some View {
+        self
+            .textFieldStyle(.plain)
+            .font(.system(size: 13, design: .monospaced))
+            .padding(8)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.white.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.white.opacity(0.1), lineWidth: 1)
+            )
+    }
+}
+
+private extension String {
+    var trimmed: String {
+        trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

@@ -40,6 +40,7 @@ final class AudioPlayerService: ObservableObject {
     private var audioEngine: AVAudioEngine?
     private var playerNode: AVAudioPlayerNode?
     private var playbackContinuation: CheckedContinuation<Void, Error>?
+    private var pcmStreamState: PCMStreamPlaybackState?
 
     /// Pre-computed RMS amplitude values for the current audio segment.
     private var amplitudeFrames: [Float] = []
@@ -53,16 +54,23 @@ final class AudioPlayerService: ObservableObject {
     /// Timer driving amplitude updates during playback.
     private var amplitudeTimer: Timer?
 
+    private final class PCMStreamPlaybackState: @unchecked Sendable {
+        var pendingBuffers: Int = 0
+        var didFinishScheduling: Bool = false
+        var didComplete: Bool = false
+        var continuation: CheckedContinuation<Void, Error>?
+    }
+
     // MARK: - Public Methods
 
-    /// Decodes MP3 `Data` to PCM, plays it through the audio engine, and returns
+    /// Decodes audio `Data` to PCM, plays it through the audio engine, and returns
     /// when playback completes. `currentAmplitude` is updated in real-time for lip sync.
     func playAudioData(_ data: Data) async throws {
 
         // Stop any existing playback (but keep the engine if possible).
         stopPlayback()
 
-        // Decode MP3 data to PCM buffer.
+        // Decode compressed audio data to PCM buffer.
         let pcmBuffer = try decodeToPCM(data: data)
 
         // Pre-compute amplitude values for lip sync (avoids AVAudioEngine tap issues).
@@ -70,42 +78,7 @@ final class AudioPlayerService: ObservableObject {
         amplitudeFrames = Self.precomputeAmplitudes(from: pcmBuffer, windowSize: windowSize)
         amplitudeFrameDuration = Double(windowSize) / pcmBuffer.format.sampleRate
 
-        // Reuse or create the audio engine and player node.
-        let engine: AVAudioEngine
-        let player: AVAudioPlayerNode
-
-        if let existingEngine = audioEngine, let existingPlayer = playerNode, existingEngine.isRunning {
-            engine = existingEngine
-            player = existingPlayer
-            // Reconnect with the new buffer's format in case it changed.
-            engine.connect(player, to: engine.mainMixerNode, format: pcmBuffer.format)
-        } else {
-            // Tear down any stale engine before creating a new one.
-            tearDown()
-
-            engine = AVAudioEngine()
-            player = AVAudioPlayerNode()
-
-            engine.attach(player)
-
-            // Connect player to the mixer. The engine handles format conversion internally.
-            engine.connect(player, to: engine.mainMixerNode, format: pcmBuffer.format)
-
-            self.audioEngine = engine
-            self.playerNode = player
-
-            // Start the engine.
-            engine.prepare()
-            do {
-                try engine.start()
-            } catch {
-                tearDown()
-                throw AudioPlayerError.engineError(error.localizedDescription)
-            }
-
-            // Give the audio IO one cycle to stabilize before playing.
-            try await Task.sleep(for: .milliseconds(50))
-        }
+        let player = try await preparePlayer(format: pcmBuffer.format)
 
         isPlaying = true
 
@@ -143,13 +116,116 @@ final class AudioPlayerService: ObservableObject {
         }
     }
 
+    /// Plays signed 16-bit little-endian PCM chunks as they arrive.
+    ///
+    /// This is used by low-latency TTS providers that can return raw PCM directly.
+    /// The player schedules each chunk onto `AVAudioPlayerNode` without waiting for
+    /// the full utterance to download.
+    func playPCM16Stream(
+        _ chunks: AsyncThrowingStream<Data, Error>,
+        sampleRate: Double,
+        channels: Int
+    ) async throws {
+        stopPlayback()
+
+        guard channels > 0 else {
+            throw AudioPlayerError.playbackFailed("PCM stream must have at least one channel.")
+        }
+
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            channels: AVAudioChannelCount(channels),
+            interleaved: false
+        ) else {
+            throw AudioPlayerError.playbackFailed("Failed to create PCM stream format.")
+        }
+
+        let player = try await preparePlayer(format: format)
+        let state = PCMStreamPlaybackState()
+        pcmStreamState = state
+
+        let bytesPerFrame = channels * MemoryLayout<Int16>.size
+        var pendingBytes = Data()
+        var didStartPlayback = false
+
+        amplitudeFrames = []
+        amplitudeFrameDuration = Double(1024) / sampleRate
+        isPlaying = true
+
+        do {
+            for try await chunk in chunks {
+                try Task.checkCancellation()
+                guard pcmStreamState === state else {
+                    throw CancellationError()
+                }
+
+                pendingBytes.append(chunk)
+                let playableByteCount = pendingBytes.count - (pendingBytes.count % bytesPerFrame)
+                guard playableByteCount > 0 else { continue }
+
+                let playableData = pendingBytes.subdata(in: 0..<playableByteCount)
+                if playableByteCount == pendingBytes.count {
+                    pendingBytes.removeAll(keepingCapacity: true)
+                } else {
+                    pendingBytes = Data(pendingBytes.dropFirst(playableByteCount))
+                }
+
+                let pcmBuffer = try Self.pcm16Buffer(from: playableData, format: format, channels: channels)
+                amplitudeFrames.append(contentsOf: Self.precomputeAmplitudes(from: pcmBuffer, windowSize: 1024))
+
+                state.pendingBuffers += 1
+                player.scheduleBuffer(pcmBuffer, completionCallbackType: .dataPlayedBack) { [weak self, weak state] _ in
+                    Task { @MainActor in
+                        guard let self, let state, self.pcmStreamState === state else { return }
+                        state.pendingBuffers -= 1
+                        self.finishPCMStreamIfReady(state)
+                    }
+                }
+
+                if !didStartPlayback {
+                    do {
+                        try ObjC.catchException {
+                            player.play()
+                        }
+                    } catch {
+                        state.pendingBuffers -= 1
+                        throw AudioPlayerError.playbackFailed(error.localizedDescription)
+                    }
+
+                    didStartPlayback = true
+                    playbackStartTime = CACurrentMediaTime()
+                    startAmplitudeTimer()
+                }
+            }
+
+            state.didFinishScheduling = true
+            if state.pendingBuffers == 0 {
+                finishPCMStreamIfReady(state)
+                return
+            }
+
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                state.continuation = continuation
+                self.finishPCMStreamIfReady(state)
+            }
+        } catch {
+            clearPCMStreamState(state)
+            throw error
+        }
+    }
+
     /// Stops playback immediately and tears down the engine completely.
     func stop() {
         // Capture and clear the continuation before tearDown to avoid double-resume.
         let continuation = playbackContinuation
         playbackContinuation = nil
+        let pcmContinuation = pcmStreamState?.continuation
+        pcmStreamState?.continuation = nil
+        pcmStreamState = nil
         tearDown()
         continuation?.resume()
+        pcmContinuation?.resume()
     }
 
     /// Stops the current playback but keeps the engine running for the next segment.
@@ -162,7 +238,11 @@ final class AudioPlayerService: ObservableObject {
 
         let continuation = playbackContinuation
         playbackContinuation = nil
+        let pcmContinuation = pcmStreamState?.continuation
+        pcmStreamState?.continuation = nil
+        pcmStreamState = nil
         continuation?.resume()
+        pcmContinuation?.resume()
 
         isPlaying = false
         currentAmplitude = 0.0
@@ -170,29 +250,68 @@ final class AudioPlayerService: ObservableObject {
 
     // MARK: - Audio Decoding
 
-    /// Decodes MP3 `Data` into a PCM `AVAudioPCMBuffer`.
+    private func preparePlayer(format: AVAudioFormat) async throws -> AVAudioPlayerNode {
+        let engine: AVAudioEngine
+        let player: AVAudioPlayerNode
+
+        if let existingEngine = audioEngine, let existingPlayer = playerNode, existingEngine.isRunning {
+            engine = existingEngine
+            player = existingPlayer
+            // Reconnect with the new buffer's format in case it changed.
+            engine.connect(player, to: engine.mainMixerNode, format: format)
+        } else {
+            // Tear down any stale engine before creating a new one.
+            tearDown()
+
+            engine = AVAudioEngine()
+            player = AVAudioPlayerNode()
+
+            engine.attach(player)
+
+            // Connect player to the mixer. The engine handles format conversion internally.
+            engine.connect(player, to: engine.mainMixerNode, format: format)
+
+            self.audioEngine = engine
+            self.playerNode = player
+
+            engine.prepare()
+            do {
+                try engine.start()
+            } catch {
+                tearDown()
+                throw AudioPlayerError.engineError(error.localizedDescription)
+            }
+
+            // Give the audio IO one cycle to stabilize before playing.
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        return player
+    }
+
+    /// Decodes audio `Data` into a PCM `AVAudioPCMBuffer`.
     private nonisolated func decodeToPCM(data: Data) throws -> AVAudioPCMBuffer {
         // Write data to a temporary file so AVAudioFile can read it.
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("mp3")
+            .appendingPathExtension(Self.fileExtension(for: data))
 
         do {
             try data.write(to: tempURL)
         } catch {
-            throw AudioPlayerError.decodingFailed("Failed to write temporary MP3 file: \(error.localizedDescription)")
+            throw AudioPlayerError.decodingFailed("Failed to write temporary audio file: \(error.localizedDescription)")
         }
 
         defer {
             try? FileManager.default.removeItem(at: tempURL)
         }
 
-        // Open the MP3 file.
+        // Open the audio file.
         let audioFile: AVAudioFile
         do {
             audioFile = try AVAudioFile(forReading: tempURL)
         } catch {
-            throw AudioPlayerError.decodingFailed("Failed to read MP3 data: \(error.localizedDescription)")
+            throw AudioPlayerError.decodingFailed("Failed to read audio data: \(error.localizedDescription)")
         }
 
         // Read all frames into a PCM buffer.
@@ -256,6 +375,43 @@ final class AudioPlayerService: ObservableObject {
         return outputBuffer
     }
 
+    private nonisolated static func pcm16Buffer(
+        from data: Data,
+        format: AVAudioFormat,
+        channels: Int
+    ) throws -> AVAudioPCMBuffer {
+        let bytesPerFrame = channels * MemoryLayout<Int16>.size
+        let frameCount = data.count / bytesPerFrame
+        guard frameCount > 0 else {
+            throw AudioPlayerError.decodingFailed("PCM stream chunk contains no complete frames.")
+        }
+
+        guard let buffer = AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: AVAudioFrameCount(frameCount)
+        ) else {
+            throw AudioPlayerError.decodingFailed("Failed to allocate PCM stream buffer.")
+        }
+
+        guard let channelData = buffer.floatChannelData else {
+            throw AudioPlayerError.decodingFailed("PCM stream buffer has no channel data.")
+        }
+
+        buffer.frameLength = AVAudioFrameCount(frameCount)
+        let bytes = [UInt8](data)
+
+        for frame in 0..<frameCount {
+            for channel in 0..<channels {
+                let offset = (frame * channels + channel) * MemoryLayout<Int16>.size
+                let rawValue = UInt16(bytes[offset]) | (UInt16(bytes[offset + 1]) << 8)
+                let sample = Int16(bitPattern: rawValue)
+                channelData[channel][frame] = Float(sample) / 32768.0
+            }
+        }
+
+        return buffer
+    }
+
     // MARK: - Amplitude Analysis (Pre-computed)
 
     /// Pre-computes RMS amplitude values from a PCM buffer in fixed-size windows.
@@ -298,6 +454,26 @@ final class AudioPlayerService: ObservableObject {
         return amplitudes
     }
 
+    private nonisolated static func fileExtension(for data: Data) -> String {
+        let bytes = [UInt8](data.prefix(12))
+        if bytes.count >= 4,
+           bytes[0] == 0x52, bytes[1] == 0x49, bytes[2] == 0x46, bytes[3] == 0x46 {
+            return "wav"
+        }
+        if bytes.count >= 4,
+           bytes[0] == 0x4f, bytes[1] == 0x67, bytes[2] == 0x67, bytes[3] == 0x53 {
+            return "ogg"
+        }
+        if bytes.count >= 3,
+           bytes[0] == 0x49, bytes[1] == 0x44, bytes[2] == 0x33 {
+            return "mp3"
+        }
+        if bytes.first == 0xff {
+            return "mp3"
+        }
+        return "mp3"
+    }
+
     /// Stops the amplitude timer without tearing down the engine.
     private func stopAmplitudeTimer() {
         amplitudeTimer?.invalidate()
@@ -328,6 +504,35 @@ final class AudioPlayerService: ObservableObject {
         } else {
             currentAmplitude = 0
         }
+    }
+
+    private func finishPCMStreamIfReady(_ state: PCMStreamPlaybackState) {
+        guard pcmStreamState === state,
+              state.didFinishScheduling,
+              state.pendingBuffers == 0,
+              !state.didComplete else {
+            return
+        }
+
+        state.didComplete = true
+        let continuation = state.continuation
+        state.continuation = nil
+        pcmStreamState = nil
+        isPlaying = false
+        stopAmplitudeTimer()
+        continuation?.resume()
+    }
+
+    private func clearPCMStreamState(_ state: PCMStreamPlaybackState) {
+        guard pcmStreamState === state else { return }
+
+        state.didComplete = true
+        let continuation = state.continuation
+        state.continuation = nil
+        pcmStreamState = nil
+        isPlaying = false
+        stopAmplitudeTimer()
+        continuation?.resume()
     }
 
     // MARK: - Cleanup

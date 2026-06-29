@@ -84,18 +84,26 @@ const ANIM_BLEND_IN = 0.25;
 // Rest pose rotations: move arms down from T-pose to natural A-pose
 // Stored as {boneName: Quaternion} after applyRestPose()
 const restPoseRotations = {};
+const sourceArmAxisXSign = { left: -1, right: 1 }; // Alicia animation source
+const armBasisNeedsCorrection = { left: false, right: false };
 
 function applyRestPose() {
     if (!vrm) return;
 
+    for (const key of Object.keys(restPoseRotations)) {
+        delete restPoseRotations[key];
+    }
+
     const armAngle = 65.0 * Math.PI / 180.0;
     const forearmAngle = 10.0 * Math.PI / 180.0;
+    const leftArmSign = getArmAxisXSign('left');
+    const rightArmSign = getArmAxisXSign('right');
 
     const poses = [
-        [VRMHumanBoneName.LeftUpperArm,  new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), armAngle)],
-        [VRMHumanBoneName.RightUpperArm, new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -armAngle)],
-        [VRMHumanBoneName.LeftLowerArm,  new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), forearmAngle)],
-        [VRMHumanBoneName.RightLowerArm, new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -forearmAngle)],
+        [VRMHumanBoneName.LeftUpperArm,  new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -leftArmSign * armAngle)],
+        [VRMHumanBoneName.RightUpperArm, new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -rightArmSign * armAngle)],
+        [VRMHumanBoneName.LeftLowerArm,  new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -leftArmSign * forearmAngle)],
+        [VRMHumanBoneName.RightLowerArm, new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -rightArmSign * forearmAngle)],
     ];
 
     for (const [boneName, quat] of poses) {
@@ -105,6 +113,31 @@ function applyRestPose() {
             restPoseRotations[boneName] = quat.clone();
         }
     }
+}
+
+function getArmAxisXSign(side) {
+    const upperBoneName = side === 'left' ? VRMHumanBoneName.LeftUpperArm : VRMHumanBoneName.RightUpperArm;
+    const lowerBoneName = side === 'left' ? VRMHumanBoneName.LeftLowerArm : VRMHumanBoneName.RightLowerArm;
+    const upperNode = vrm?.humanoid.getNormalizedBoneNode(upperBoneName);
+    const lowerNode = vrm?.humanoid.getNormalizedBoneNode(lowerBoneName);
+    if (!upperNode || !lowerNode) return sourceArmAxisXSign[side];
+
+    const upperPosition = new THREE.Vector3();
+    const lowerPosition = new THREE.Vector3();
+    vrm.scene.updateMatrixWorld(true);
+    upperNode.getWorldPosition(upperPosition);
+    lowerNode.getWorldPosition(lowerPosition);
+    vrm.scene.worldToLocal(upperPosition);
+    vrm.scene.worldToLocal(lowerPosition);
+
+    const dx = lowerPosition.x - upperPosition.x;
+    if (Math.abs(dx) < 0.0001) return sourceArmAxisXSign[side];
+    return dx >= 0 ? 1 : -1;
+}
+
+function initializeAnimationRetargeting() {
+    armBasisNeedsCorrection.left = getArmAxisXSign('left') !== sourceArmAxisXSign.left;
+    armBasisNeedsCorrection.right = getArmAxisXSign('right') !== sourceArmAxisXSign.right;
 }
 
 function restoreBoneToRestPose(vrmBoneName) {
@@ -178,6 +211,69 @@ const BONE_NAME_MAP = {
     'rightLittleDistal': VRMHumanBoneName.RightLittleDistal,
 };
 
+const UPPER_LIMB_BONE_NAMES = new Set([
+    'leftShoulder',
+    'leftUpperArm',
+    'leftLowerArm',
+    'leftHand',
+    'leftThumbMetacarpal',
+    'leftThumbProximal',
+    'leftThumbIntermediate',
+    'leftThumbDistal',
+    'leftIndexProximal',
+    'leftIndexIntermediate',
+    'leftIndexDistal',
+    'leftMiddleProximal',
+    'leftMiddleIntermediate',
+    'leftMiddleDistal',
+    'leftRingProximal',
+    'leftRingIntermediate',
+    'leftRingDistal',
+    'leftLittleProximal',
+    'leftLittleIntermediate',
+    'leftLittleDistal',
+    'rightShoulder',
+    'rightUpperArm',
+    'rightLowerArm',
+    'rightHand',
+    'rightThumbMetacarpal',
+    'rightThumbProximal',
+    'rightThumbIntermediate',
+    'rightThumbDistal',
+    'rightIndexProximal',
+    'rightIndexIntermediate',
+    'rightIndexDistal',
+    'rightMiddleProximal',
+    'rightMiddleIntermediate',
+    'rightMiddleDistal',
+    'rightRingProximal',
+    'rightRingIntermediate',
+    'rightRingDistal',
+    'rightLittleProximal',
+    'rightLittleIntermediate',
+    'rightLittleDistal',
+]);
+
+function animationBoneSide(boneName) {
+    if (boneName.startsWith('left')) return 'left';
+    if (boneName.startsWith('right')) return 'right';
+    return null;
+}
+
+function retargetAnimationQuaternion(boneName, quat) {
+    if (!UPPER_LIMB_BONE_NAMES.has(boneName)) return quat;
+
+    const side = animationBoneSide(boneName);
+    if (!side || !armBasisNeedsCorrection[side]) return quat;
+
+    // The animation clips were authored on Alicia, whose arm bones point in
+    // the opposite X direction from Pekora's converted PMX arm bones.
+    // Conjugating by a 180-degree Y rotation preserves the motion while
+    // translating it into the target arm basis.
+    quat.set(-quat.x, quat.y, -quat.z, quat.w).normalize();
+    return quat;
+}
+
 // ============================================================
 // Helper: post message to Swift bridge
 // ============================================================
@@ -218,6 +314,7 @@ window.loadVRM = function(url) {
             VRMUtils.rotateVRM0(vrm);
 
             scene.add(vrm.scene);
+            initializeAnimationRetargeting();
 
             // Apply rest pose (arms down from T-pose)
             applyRestPose();
@@ -410,6 +507,7 @@ function sampleAnimation(now) {
         quatB.set(bArr[0], bArr[1], bArr[2], bArr[3]);
 
         quatResult.slerpQuaternions(quatA, quatB, t);
+        retargetAnimationQuaternion(boneName, quatResult);
 
         // Apply blend-in from previous pose
         if (blendFactor < 1.0 && animBlendFromPose[boneName]) {

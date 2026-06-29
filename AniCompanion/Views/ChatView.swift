@@ -345,9 +345,11 @@ private final class MockTTSService: TTSServiceProtocol, Sendable {
     let groupID: String = ""
     let voiceID: String = ""
 
-    func synthesize(text: String, emotion: Emotion) -> AsyncThrowingStream<Data, Error> {
-        AsyncThrowingStream { continuation in
+    var outputFormat: TTSAudioStream.Format { .encoded }
+
+    func synthesize(text: String, emotion: Emotion) -> TTSAudioStream {
+        TTSAudioStream(format: .encoded, chunks: AsyncThrowingStream { continuation in
             continuation.finish()
-        }
+        })
     }
 }
