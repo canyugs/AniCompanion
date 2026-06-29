@@ -21,6 +21,8 @@ actor AgentStateWSClient {
     private var continuation: AsyncStream<AgentStateEvent>.Continuation?
     private var isRunning = false
     private var generation: Int = 0
+    private var pingInterval: TimeInterval = 30
+    private var reconnectAttempts = 0
 
     let events: AsyncStream<AgentStateEvent>
 
@@ -62,9 +64,12 @@ actor AgentStateWSClient {
         let wsTask = session.webSocketTask(with: request)
         self.task = wsTask
         wsTask.resume()
+        reconnectAttempts = 0
 
         continuation?.yield(.connected)
         receiveLoop()
+        startPingLoop()
+        sendSubscribe(events: ["agent_state", "emotion", "notification"])
     }
 
     func disconnect() {
@@ -137,11 +142,25 @@ actor AgentStateWSClient {
     // MARK: - Reconnect
 
     private func scheduleReconnect() {
+        let delay = min(Double(1 << reconnectAttempts), 30.0)
+        reconnectAttempts += 1
         let gen = generation
         Task {
-            try? await Task.sleep(for: .seconds(5))
+            try? await Task.sleep(for: .seconds(delay))
             guard self.generation == gen else { return }
             connect()
+        }
+    }
+
+    // MARK: - Ping Loop
+
+    private func startPingLoop() {
+        Task {
+            while isRunning {
+                try? await Task.sleep(for: .seconds(pingInterval))
+                guard isRunning else { break }
+                sendPing()
+            }
         }
     }
 
