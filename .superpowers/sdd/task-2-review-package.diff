@@ -1,0 +1,130 @@
+diff --git a/AniCompanion/Pipeline/ConversationController.swift b/AniCompanion/Pipeline/ConversationController.swift
+index 6a2cefe..48e3fec 100644
+--- a/AniCompanion/Pipeline/ConversationController.swift
++++ b/AniCompanion/Pipeline/ConversationController.swift
+@@ -87,20 +87,26 @@ final class ConversationController: ObservableObject {
+ 
+     /// The ref ID of the current notification being processed.
+     private var currentNotifyRef: String?
+ 
+     /// Continuation for bridging notification tokens into an AsyncThrowingStream.
+     private var notifyContinuation: AsyncThrowingStream<String, Error>.Continuation?
+ 
+     /// Task for processing server-pushed notifications.
+     private var notificationTask: Task<Void, Never>?
+ 
++    /// Tier-2 WebSocket client for agent-state push from the VTuber adapter.
++    var agentStateClient: AgentStateWSClient?
++
++    /// Task running the Tier-2 WS event listener.
++    private var agentStateListenerTask: Task<Void, Never>?
++
+     /// Lip sync observation subscription.
+     private var amplitudeCancellable: AnyCancellable?
+ 
+     /// Monotonically increasing counter to identify each pipeline invocation.
+     /// Used to prevent stale cleanup from clobbering a newer pipeline's state.
+     private var pipelineGeneration: UInt64 = 0
+ 
+     /// The localized character persona (system prompt + proactive prompt templates).
+     private let persona: Persona
+ 
+@@ -340,20 +346,74 @@ final class ConversationController: ObservableObject {
+         }
+         proactiveTimer = timer
+         timer.resume()
+     }
+ 
+     /// Reset the proactive timer (called after any message completes).
+     private func resetProactiveTimer() {
+         startProactiveTimer()
+     }
+ 
++    // MARK: - Agent State (Tier-2 WS)
++
++    /// Listen for Tier-2 WS events and drive character animation + proactive speech.
++    func startAgentStateListener() {
++        guard let client = agentStateClient else { return }
++        agentStateListenerTask?.cancel()
++
++        agentStateListenerTask = Task { [weak self] in
++            await client.connect()
++
++            for await event in await client.events {
++                guard let self, !Task.isCancelled else { break }
++                switch event {
++                case .agentState(let state, _):
++                    self.handleAgentState(state)
++                case .emotion(let tag, _):
++                    if let emotion = Emotion.from(tag: "[\(tag)]") {
++                        self.characterController?.setExpression(emotion, blendDuration: 0.3)
++                    }
++                case .notification(let text, let urgency):
++                    self.handleAmbientNotification(text: text, urgency: urgency)
++                case .toolStatus:
++                    break // ponytail: display in UI when chat panel shows tool activity
++                case .connected, .disconnected:
++                    break
++                }
++            }
++        }
++    }
++
++    private func handleAgentState(_ state: String) {
++        switch state {
++        case "thinking":
++            characterController?.playAnimation(named: "think")
++        case "working":
++            characterController?.playAnimation(named: "talk_gesture")
++        case "attention":
++            characterController?.playAnimation(named: "wave")
++        case "idle":
++            characterController?.stopAnimation()
++        case "error":
++            characterController?.setExpression(.surprised, blendDuration: 0.2)
++        default:
++            break
++        }
++    }
++
++    private func handleAmbientNotification(text: String, urgency: String) {
++        guard urgency == "high" || !isProcessing else { return }
++        Task {
++            await sendProactiveMessage(prompt: text)
++        }
++    }
++
+     /// Format the current date/time in a human-readable string for the active language.
+     private static func formattedCurrentTime() -> String {
+         let formatter = DateFormatter()
+         formatter.locale = AppLanguage.current.locale
+         formatter.dateStyle = .long
+         formatter.timeStyle = .short
+         return formatter.string(from: Date())
+     }
+ 
+     /// Build an idle task prompt from the localized persona, rotating through the
+@@ -730,20 +790,23 @@ final class ConversationController: ObservableObject {
+         // Cancel active notification stream.
+         if let ref = currentNotifyRef {
+             notifyContinuation?.finish(throwing: CancellationError())
+             notifyContinuation = nil
+             currentNotifyRef = nil
+             Task { try? await chatTransport.send(.ack(ref: ref)) }
+         }
+         notificationTask?.cancel()
+         notificationTask = nil
+ 
++        agentStateListenerTask?.cancel()
++        agentStateListenerTask = nil
++
+         processingTask?.cancel()
+         processingTask = nil
+ 
+         proactiveTimer?.cancel()
+         proactiveTimer = nil
+ 
+         audioPlayer.stop()
+         stopLipSyncObservation()
+ 
+         if isListening {
