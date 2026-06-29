@@ -171,6 +171,11 @@ final class AppState: ObservableObject {
         // Cancel any ongoing conversation processing.
         conversationController?.cancel()
 
+        // Tear down Tier-2 WS.
+        if let wsClient = conversationController?.agentStateClient {
+            Task { await wsClient.disconnect() }
+        }
+
         // Tear down the existing chat transport.
         chatTransport?.disconnect()
         connectionCancellable = nil
