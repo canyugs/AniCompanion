@@ -402,8 +402,8 @@ final class ConversationController: ObservableObject {
 
     private func handleAmbientNotification(text: String, urgency: String) {
         guard urgency == "high" || !isProcessing else { return }
-        Task {
-            await sendProactiveMessage(prompt: text)
+        Task { @MainActor [weak self] in
+            await self?.sendProactiveMessage(prompt: text)
         }
     }
 
