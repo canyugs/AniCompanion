@@ -42,6 +42,10 @@ end-to-end and runnable locally so your conversations stay on your machine.
 - **Emotions** — 16 emotion tags from the LLM drive the avatar's facial expressions.
 - **Proactive companion** — greets you on launch and speaks up after a period of inactivity
   (tool-agnostic: uses your Hermes tools if configured, otherwise just chats).
+- **Desktop Pet mode** — detach 小光 into a borderless, transparent, always-on-top overlay that
+  lives on your desktop (🐾 toolbar button, ⌘⇧D, or the **Character** menu). Drag to move,
+  scroll/pinch to resize, and a speech bubble shows what she's saying; double-click her to return
+  to the window.
 - **Multilingual** — ships in **English** and **Traditional Chinese (繁體中文)**, switchable in
   Settings (both the interface and the language 小光 speaks). Adding a language is easy — see
   [`CONTRIBUTING.md`](CONTRIBUTING.md).

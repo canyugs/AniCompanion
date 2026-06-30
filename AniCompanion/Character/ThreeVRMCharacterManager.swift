@@ -31,6 +31,10 @@ final class ThreeVRMCharacterManager: NSObject, ObservableObject, CharacterContr
     /// The WKWebView instance, set by ThreeVRMRenderView after creation.
     var webView: WKWebView?
 
+    /// Whether Desktop Pet mode is active. Gates the speech bubble (set by `AppDelegate`),
+    /// so `setSpeechText` only renders the bubble when she's living on the desktop.
+    var petModeActive: Bool = false
+
     // MARK: - Animation Data
 
     /// Raw JSON data for each animation clip, keyed by name.
@@ -180,6 +184,18 @@ final class ThreeVRMCharacterManager: NSObject, ObservableObject, CharacterContr
 
         let js = "window.setMouthOpen(\(clamped));"
         webView?.evaluateJavaScript(js, completionHandler: nil)
+    }
+
+    func setSpeechText(_ text: String?) {
+        guard petModeActive else { return }   // bubble only shows on the desktop pet
+        if let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // JSON-encode (in an array, for safe escaping) and pass the element to JS.
+            guard let data = try? JSONSerialization.data(withJSONObject: [text]),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            webView?.evaluateJavaScript("window.showBubble && window.showBubble(\(json)[0]);", completionHandler: nil)
+        } else {
+            webView?.evaluateJavaScript("window.hideBubble && window.hideBubble();", completionHandler: nil)
+        }
     }
 
     func playIdleAnimation() {

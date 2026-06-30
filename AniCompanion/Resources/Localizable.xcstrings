@@ -57,6 +57,12 @@
         "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "取消" } }
       }
     },
+    "Character" : {
+      "comment" : "Menu bar: the Character menu (desktop pet toggle)",
+      "localizations" : {
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "角色" } }
+      }
+    },
     "Connected — Settings" : {
       "localizations" : {
         "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "已連線 — 設定" } }
@@ -65,6 +71,18 @@
     "Connection" : {
       "localizations" : {
         "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "連線" } }
+      }
+    },
+    "Desktop Pet Mode" : {
+      "comment" : "Character menu item: toggle desktop pet mode",
+      "localizations" : {
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "桌面寵物模式" } }
+      }
+    },
+    "Desktop Pet Mode (⌘⇧D)" : {
+      "comment" : "Tooltip for the pawprint toolbar button",
+      "localizations" : {
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "桌面寵物模式（⌘⇧D）" } }
       }
     },
     "Curious" : {
