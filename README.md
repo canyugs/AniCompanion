@@ -37,19 +37,31 @@ end-to-end and runnable locally so your conversations stay on your machine.
 - **Streaming chat** through a pluggable agent backend. Ships with **Hermes Agent** (the validated
   reference) and a generic **OpenAI-compatible** backend (Ollama, LM Studio, vLLM, OpenRouter, …);
   adding another is a one-`case` change — see [`CONTRIBUTING.md`](CONTRIBUTING.md).
-- **Text-to-speech** via MiniMax Speech-02-Turbo or a local BlueMagpie-TTS server, with
-  **amplitude-driven lip sync**.
+- **Text-to-speech** via MiniMax Speech-02-Turbo, with **amplitude-driven lip sync** — plus an
+  *experimental* local **BlueMagpie-TTS** option (pending verification).
 - **Speech-to-text** voice input using Apple's on-device Speech framework (auto-stops on silence).
 - **Emotions** — 16 emotion tags from the LLM drive the avatar's facial expressions.
 - **Proactive companion** — greets you on launch and speaks up after a period of inactivity
   (tool-agnostic: uses your Hermes tools if configured, otherwise just chats).
-- **Desktop Pet mode** — detach 小光 into a borderless, transparent, always-on-top overlay that
-  lives on your desktop (🐾 toolbar button, ⌘⇧D, or the **Character** menu). Drag to move,
-  scroll/pinch to resize, and a speech bubble shows what she's saying; double-click her to return
-  to the window.
+- **Desktop Pet mode** — detach 小光 into a transparent, always-on-top overlay that lives on your
+  desktop; drag to move, scroll/pinch to resize. See [Desktop Pet mode](#desktop-pet-mode).
 - **Multilingual** — ships in **English** and **Traditional Chinese (繁體中文)**, switchable in
   Settings (both the interface and the language 小光 speaks). Adding a language is easy — see
   [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+## What's new in v0.2.0
+
+This release adds:
+
+- **🐾 Desktop Pet mode** — pop 小光 out of her window into a transparent, always-on-top desktop
+  overlay you can drag and resize. See [Desktop Pet mode](#desktop-pet-mode).
+- **🎙️ Pluggable text-to-speech** — choose your voice provider in **Settings → Voice**: cloud
+  **MiniMax**, plus an *experimental* local **BlueMagpie-TTS** option (pending verification — see
+  [Local BlueMagpie TTS](#local-bluemagpie-tts)). Contributed by [@hlb](https://github.com/hlb).
+- **🧍 Configurable character model** — switch VRM models from **Settings → Character** instead of
+  editing source. Contributed by [@hlb](https://github.com/hlb). See [Using your own VRM](#using-your-own-vrm).
+- **Clearer language setting** — the Language picker now notes that the **interface** language
+  applies after an app restart (the character switches immediately).
 
 ## Requirements
 
@@ -58,9 +70,9 @@ end-to-end and runnable locally so your conversations stay on your machine.
 - **[XcodeGen](https://github.com/yonaskolb/XcodeGen)** — `brew install xcodegen`
 - A running **agent gateway** — a **Hermes Agent** gateway is the validated path (see
   [Bring your own agent](#bring-your-own-agent))
-- *(Optional, for voice)* either a **MiniMax** account for cloud TTS (API key + Group ID) or a
-  local **BlueMagpie-TTS** server. Without TTS, disable voice in Settings and 小光 replies with
-  text + expressions only.
+- *(Optional, for voice)* a **MiniMax** account for cloud TTS (API key + Group ID). Without TTS,
+  disable voice in Settings and 小光 replies with text + expressions only. *(An experimental local
+  **BlueMagpie-TTS** option also exists — see [Local BlueMagpie TTS](#local-bluemagpie-tts).)*
 
 ## Quick start
 
@@ -81,10 +93,10 @@ On first launch, open **Settings (⚙️)** and fill in:
 - **Agent backend** (Hermes by default), its **Endpoint** (default `http://127.0.0.1:8642`) and
   **API Key** — you'll need a gateway **already running** for chat to work (see
   [Bring your own agent](#bring-your-own-agent) below)
-- *(optional)* **TTS Provider**:
+- *(optional)* **Voice → TTS Provider**:
   - **MiniMax** — enter your API Key, Group ID, and Voice ID.
-  - **BlueMagpie** — run the local server below and set its URL (default
-    `http://127.0.0.1:8765`).
+  - **BlueMagpie** *(experimental, pending verification)* — point it at a local BlueMagpie-TTS
+    server URL.
 
 > **First launch needs internet** — the three-vrm runtime loads from a CDN the first time, then
 > caches. When it's working you'll see 小光 appear in the window and greet you; type in the box (or
@@ -124,31 +136,39 @@ Full walkthrough, including optional MCP tools for richer proactive behavior, is
 
 ## Local BlueMagpie TTS
 
-AniCompanion can use [OpenFormosa/BlueMagpie-TTS](https://github.com/OpenFormosa/BlueMagpie-TTS)
-through a small local HTTP server. Install and test BlueMagpie in its own virtual environment first,
-then install `soundfile` if it is not already present:
+Alongside MiniMax, AniCompanion includes an optional **BlueMagpie-TTS** provider — select it under
+**Settings → Voice → TTS Provider → BlueMagpie** to route speech to a local
+[BlueMagpie-TTS](https://github.com/OpenFormosa/BlueMagpie-TTS) HTTP server (`POST /v1/tts`, WAV).
 
-```bash
-cd ~/dev/BlueMagpie-TTS
-source .venv/bin/activate
-pip install soundfile
-python ~/dev/AniCompanion/Tools/blue_magpie_tts_server.py
-```
+> ⚠️ **Experimental — not verified end-to-end yet.** The provider and a reference server
+> (`Tools/blue_magpie_tts_server.py`) are wired up, but this path is still pending validation against
+> BlueMagpie's next release. Until it's confirmed working, use **MiniMax** for voice — full setup
+> steps will land here once BlueMagpie is verified.
 
-The server listens on `http://127.0.0.1:8765`. Test it before using it from the app:
+## Desktop Pet mode
 
-```bash
-curl -X POST http://127.0.0.1:8765/v1/tts \
-  -H 'Content-Type: application/json' \
-  -d '{"text":"今天天氣真好。","inference_timesteps":5}' \
-  --output /tmp/bluemagpie.wav
+Detach 小光 from her window and let her live **on your desktop** — a borderless, transparent,
+always-on-top companion that floats over your other apps. There's no chat panel in pet mode; instead
+a small **speech bubble** shows what she's saying (synced to her voice when TTS is on, paced for
+reading when it's off).
 
-afplay /tmp/bluemagpie.wav
-```
+**Enter pet mode** — any of:
 
-The endpoint returns `audio/wav`. In AniCompanion, choose
-**Settings → Voice → TTS Provider → BlueMagpie**, set the server URL, and tune
-**Inference Timesteps**. Lower values are faster; higher values usually improve quality.
+- the **🐾** button in the window's toolbar
+- the **Character ▸ Desktop Pet Mode** menu
+- the keyboard shortcut **⌘⇧D**
+
+**While she's on the desktop:**
+
+| Action | How |
+|--------|-----|
+| **Move her** | Click and drag anywhere on her |
+| **Resize** | Scroll up/down over her (mouse wheel or two-finger), or pinch on a trackpad — she keeps her proportions, and the size sticks across toggles |
+| **Return to the window** | **Double-click** her — or press **⌘⇧D**, or use the 🐾 button / **Character** menu again |
+
+Your conversation is untouched while she's out: returning to the window brings the chat back exactly
+as you left it. She floats above other apps and follows you across Spaces, so she's there whatever
+you're working on.
 
 ## The VRM model
 
@@ -200,7 +220,7 @@ Architecture details and developer notes are in [`CLAUDE.md`](CLAUDE.md).
 | `xcodegen: command not found` | `brew install xcodegen` (see [Requirements](#requirements)). |
 | The window opens but the character never appears | First launch needs **internet** (the three-vrm runtime loads from a CDN). Also confirm `./scripts/download-model.sh` ran and a `.vrm` exists in `AniCompanion/Resources/VRMModel/`. |
 | You type a message and nothing happens | Your **agent gateway isn't running / reachable**. Start it (e.g. `hermes gateway`) and check the connection indicator in Settings. For Hermes, a 401 means the **API Key** in Settings doesn't match `API_SERVER_KEY`. |
-| 小光 replies in text but doesn't speak | TTS is off or unconfigured — that's fine. For voice, configure **MiniMax** or **BlueMagpie** under Settings → Voice, or leave TTS disabled. |
+| 小光 replies in text but doesn't speak | TTS is off or unconfigured — that's fine. For voice, add your **MiniMax** key + Group ID under Settings → Voice, or leave TTS disabled. (BlueMagpie TTS is experimental — see [Local BlueMagpie TTS](#local-bluemagpie-tts).) |
 | Voice input does nothing | On first use macOS prompts for **Microphone** and **Speech Recognition** permission — allow both (System Settings → Privacy & Security). |
 
 More runtime diagnostics (health checks, connection states) are in [`docs/hermes-setup.md`](docs/hermes-setup.md).
