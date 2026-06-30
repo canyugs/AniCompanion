@@ -26,6 +26,7 @@ struct SettingsView: View {
     @State private var ttsVoiceID: String = "Chinese (Mandarin)_Crisp_Girl"
     @State private var ttsEnabled: Bool = true
     @State private var language: AppLanguage = .english
+    @State private var vrmModelFilename: String = "AliciaSolid.vrm"
 
     /// Shows the "restart to apply UI language" alert after a language change.
     @State private var showRestartAlert = false
@@ -102,7 +103,32 @@ struct SettingsView: View {
                         }
                     }
 
-                    // MARK: Section 1: Voice
+                    // MARK: Section 1: Character
+
+                    SettingsSection(title: "Character", icon: "person.crop.square") {
+                        VStack(alignment: .leading, spacing: 14) {
+                            SettingsField(label: "VRM Model Filename") {
+                                TextField("AliciaSolid.vrm", text: $vrmModelFilename)
+                                    .textFieldStyle(.plain)
+                                    .font(.system(size: 13, design: .monospaced))
+                                    .padding(8)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .fill(Color.white.opacity(0.06))
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                                    )
+                            }
+
+                            Text("File must exist in Resources/VRMModel.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.white.opacity(0.4))
+                        }
+                    }
+
+                    // MARK: Section 2: Voice
 
                     SettingsSection(title: "Voice", icon: "speaker.wave.2.fill") {
                         VStack(alignment: .leading, spacing: 14) {
@@ -191,7 +217,7 @@ struct SettingsView: View {
                         }
                     }
 
-                    // MARK: Section 2: Language
+                    // MARK: Section 3: Language
 
                     SettingsSection(title: "Language", icon: "globe") {
                         VStack(alignment: .leading, spacing: 8) {
@@ -290,6 +316,7 @@ struct SettingsView: View {
         ttsVoiceID = appState.ttsVoiceID
         ttsEnabled = appState.ttsEnabled
         language = AppLanguage.current
+        vrmModelFilename = appState.vrmModelFilename
     }
 
     /// Write local state back to AppState for persistence, then reinitialize services.
@@ -309,6 +336,7 @@ struct SettingsView: View {
         appState.blueMagpieInferenceTimesteps = blueMagpieInferenceTimesteps
         appState.ttsVoiceID = ttsVoiceID
         appState.ttsEnabled = ttsEnabled
+        appState.vrmModelFilename = vrmModelFilename
 
         // Persist the language. The character/persona + STT pick it up immediately on
         // reinitialize; the SwiftUI interface needs `AppleLanguages` + a relaunch.

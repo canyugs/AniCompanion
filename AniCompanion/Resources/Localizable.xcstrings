@@ -36,11 +36,6 @@
         "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "API 金鑰（如有需要）" } }
       }
     },
-    "API Keys" : {
-      "localizations" : {
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "API 金鑰" } }
-      }
-    },
     "Audio engine error: %@" : {
       "localizations" : {
         "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "音訊引擎錯誤：%@" } }
@@ -60,6 +55,12 @@
     "Cancel" : {
       "localizations" : {
         "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "取消" } }
+      }
+    },
+    "Character" : {
+      "comment" : "Settings section: VRM character model selection",
+      "localizations" : {
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "角色" } }
       }
     },
     "Connected — Settings" : {
@@ -104,6 +105,12 @@
       "comment" : "Emotion name",
       "localizations" : {
         "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "興奮" } }
+      }
+    },
+    "File must exist in Resources/VRMModel." : {
+      "comment" : "Settings: hint under the VRM model filename field",
+      "localizations" : {
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "檔案必須位於 Resources/VRMModel。" } }
       }
     },
     "Group ID" : {
@@ -309,6 +316,12 @@
       "comment" : "Settings: placeholder for the TTS voice ID field",
       "localizations" : {
         "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "語音 ID" } }
+      }
+    },
+    "VRM Model Filename" : {
+      "comment" : "Settings: VRM model filename field label",
+      "localizations" : {
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "VRM 模型檔名" } }
       }
     }
   },
