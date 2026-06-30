@@ -30,7 +30,7 @@ final class PetPanelWindow: NSWindow {
 // `characterManager.webView` if it exists), so toggling never reloads the model.
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     let appState = AppState()
 
@@ -38,7 +38,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var petCancellable: AnyCancellable?
     private var isPetActive = false
 
-    private static let basePetSize = NSSize(width: 320, height: 540)
+    /// Which side of her face the speech bubble currently sits on ("left"/"right"); flipped as
+    /// she's dragged so it never runs off the screen edge. See `bubbleSide(for:)`.
+    private var lastBubbleSide = "right"
+
+    // Wider than the character's own footprint so the speech bubble fits in the transparent
+    // margin beside her face. She stays centered; the bubble sits in whichever side margin has
+    // more screen room (see vrm_scene.html #bubble + setBubbleSide). Tune width if it feels cramped.
+    private static let basePetSize = NSSize(width: 500, height: 540)
     private static let windowedSize = NSSize(width: 1000, height: 650)
 
     /// Current pet size — persists across toggles so a resized pet stays that size.
@@ -55,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.center()
         window.makeKeyAndOrderFront(nil)
         mainWindow = window
+        window.delegate = self   // windowDidMove → re-pick the bubble side as she's dragged
 
         // Drive the window's pet/normal state directly off the shared flag. Guarding on a
         // tracked bool (not the style mask) avoids the `.contains(.borderless)` tautology and
@@ -129,6 +137,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.contentView = container
         window.makeKeyAndOrderFront(nil)                  // must re-key after the mask change
 
+        // Place the speech bubble beside her face, on whichever side has more screen room
+        // (so it never runs off the edge). Recomputed as she's dragged — see windowDidMove.
+        lastBubbleSide = bubbleSide(for: window)
+        webView.evaluateJavaScript("window.setBubbleSide && window.setBubbleSide('\(lastBubbleSide)')", completionHandler: nil)
+
         // The WebGL scene re-fits on the JS 'resize' event, which isn't guaranteed to fire on
         // an AppKit reparent — dispatch it explicitly so three.js re-frames the full character.
         refitScene(webView)
@@ -159,8 +172,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.center()
         window.makeKeyAndOrderFront(nil)
 
-        // Re-fit after SwiftUI has laid the webView back out at the windowed size.
+        // Re-fit at the windowed size (she's centered in both modes — nothing to un-pan).
         if let webView { refitScene(webView) }
+    }
+
+    /// Which side of her face to place the speech bubble — the side with more room between her
+    /// and the screen edge, so a wide bubble never runs off-screen. (She's centered in the pet
+    /// window, so the window's mid-X ≈ her on-screen position.)
+    private func bubbleSide(for window: NSWindow) -> String {
+        guard let screenFrame = (window.screen ?? NSScreen.main)?.visibleFrame else { return "right" }
+        return window.frame.midX <= screenFrame.midX ? "right" : "left"
+    }
+
+    /// As she's dragged around, flip the bubble to the roomier side once she crosses the midline.
+    func windowDidMove(_ notification: Notification) {
+        guard isPetActive,
+              let window = mainWindow,
+              let webView = appState.characterManager.webView else { return }
+        let side = bubbleSide(for: window)
+        guard side != lastBubbleSide else { return }
+        lastBubbleSide = side
+        webView.evaluateJavaScript("window.setBubbleSide && window.setBubbleSide('\(side)')", completionHandler: nil)
     }
 
     /// Force the three.js scene to re-read its size and re-frame the camera.

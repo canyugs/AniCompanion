@@ -9,15 +9,17 @@
   html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; }
   canvas { display: block; width: 100%; height: 100%; }
 
-  /* Desktop-pet speech bubble (caption at the bottom, so it never covers her face
-     and a centered bubble can't be cropped by the narrow window width) */
+  /* Desktop-pet speech bubble — anchored beside her face (default upper-RIGHT), so it stays
+     on-screen even when she's parked with her legs below the screen edge (the old bottom
+     caption scrolled off with her legs). She stays centered in a widened window; Swift flips
+     the bubble to her LEFT when she's near the right screen edge (see AppDelegate setBubbleSide
+     + the body.bubble-left rules below). Tune top / right / max-width to taste. */
   #bubble {
     position: fixed;
-    bottom: 16px;
-    left: 50%;
-    transform: translateX(-50%) translateY(6px);
-    max-width: 90%;
-    max-height: 40%;
+    top: 11%;
+    right: 14px;
+    max-width: 34%;
+    max-height: 72%;
     overflow: hidden;
     box-sizing: border-box;
     padding: 9px 13px;
@@ -26,22 +28,32 @@
     font: 500 15px/1.42 -apple-system, "PingFang TC", "Helvetica Neue", sans-serif;
     border-radius: 14px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-    text-align: center;
+    text-align: left;
     white-space: pre-wrap;
     word-break: break-word;
     opacity: 0;
+    transform: translateX(8px);
     transition: opacity 0.22s ease, transform 0.22s ease;
     pointer-events: none;
     -webkit-backdrop-filter: blur(3px);
   }
-  #bubble.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-  #bubble::after {   /* little tail pointing up toward her */
+  #bubble.show { opacity: 1; transform: translateX(0); }
+  #bubble::after {   /* little tail pointing left toward her face */
     content: "";
     position: absolute;
-    top: -7px; left: 50%; transform: translateX(-50%);
-    border-left: 7px solid transparent;
-    border-right: 7px solid transparent;
-    border-bottom: 7px solid rgba(22, 20, 32, 0.85);
+    top: 18px; left: -7px;
+    border-top: 7px solid transparent;
+    border-bottom: 7px solid transparent;
+    border-right: 7px solid rgba(22, 20, 32, 0.85);
+  }
+  /* When she's near the RIGHT screen edge, Swift adds body.bubble-left (setBubbleSide) so the
+     bubble flips to her LEFT and stays on-screen. Mirror the position, slide-in, and tail. */
+  body.bubble-left #bubble { right: auto; left: 14px; transform: translateX(-8px); }
+  body.bubble-left #bubble.show { transform: translateX(0); }
+  body.bubble-left #bubble::after {
+    left: auto; right: -7px;
+    border-right: 0;
+    border-left: 7px solid rgba(22, 20, 32, 0.85);
   }
 </style>
 <script type="importmap">

@@ -548,6 +548,13 @@ function updateCameraLookAt() {
     camera.lookAt(camera.position.x, cameraLookAtY, 0);
 }
 
+// Desktop Pet mode shows the speech bubble beside her face. Swift picks the side with more
+// screen room (so it never runs off the edge) and passes 'left' or 'right' here; she stays
+// centered and only the bubble moves.
+window.setBubbleSide = (side) => {
+    document.body.classList.toggle('bubble-left', side === 'left');
+};
+
 window.moveCameraUp = function() {
     camera.position.y += CAM_STEP;
     cameraLookAtY += CAM_STEP;
