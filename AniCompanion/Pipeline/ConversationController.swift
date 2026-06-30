@@ -13,6 +13,9 @@ protocol CharacterControllerProtocol: AnyObject, Sendable {
     @MainActor func playIdleAnimation()
     @MainActor func playAnimation(named: String)
     @MainActor func stopAnimation()
+    /// Show the given line in the desktop-pet speech bubble (nil hides it). No-op unless
+    /// pet mode is active. Used to display what 小光 is currently saying.
+    @MainActor func setSpeechText(_ text: String?)
 }
 
 // MARK: - ConversationController
@@ -72,6 +75,10 @@ final class ConversationController: ObservableObject {
 
     /// The current processing task, held for cancellation support.
     private var processingTask: Task<Void, Never>?
+
+    /// Pages the desktop-pet speech bubble through a reply's sentences when TTS is off
+    /// (with TTS on, the playback loop drives the bubble synced to audio instead).
+    private var bubbleTask: Task<Void, Never>?
 
     /// Long-lived task that listens to chat transport events.
     private var eventListenerTask: Task<Void, Never>?
@@ -544,6 +551,9 @@ final class ConversationController: ObservableObject {
         // TTS + playback (same as chat pipeline, skip when TTS is disabled).
         if ttsEnabled {
             try await runTTSPlayback(parser: parser, audioQueue: audioQueue, charController: charController)
+        } else if !rawResponse.isEmpty {
+            // No audio to sync to — page the reply sentence-by-sentence in the pet bubble.
+            pageSpeechBubble(rawResponse)
         }
     }
 
@@ -604,6 +614,9 @@ final class ConversationController: ObservableObject {
         // TTS + playback (non-fatal, skip when TTS is disabled).
         if ttsEnabled {
             try await runTTSPlayback(parser: parser, audioQueue: audioQueue, charController: charController)
+        } else if !rawResponse.isEmpty {
+            // No audio to sync to — page the reply sentence-by-sentence in the pet bubble.
+            pageSpeechBubble(rawResponse)
         }
     }
 
@@ -672,7 +685,7 @@ final class ConversationController: ObservableObject {
 
                 // Audio consumer.
                 let audioPlayerRef = audioPlayer
-                group.addTask { @Sendable [charController] in
+                group.addTask { @Sendable [charController, capturedSentences] in
                     Log.pipeline("[Pipeline] Audio consumer started")
                     await MainActor.run {
                         self.isSpeaking = true
@@ -680,6 +693,11 @@ final class ConversationController: ObservableObject {
                     while let segment = await audioQueue.dequeueNext() {
                         try Task.checkCancellation()
                         Log.pipeline("[Pipeline] Playing segment #\(segment.sequence) (\(segment.data.count) bytes)")
+                        // Pet-mode speech bubble: show this sentence as its audio starts (synced).
+                        if segment.sequence < capturedSentences.count {
+                            let raw = capturedSentences[segment.sequence].text
+                            await MainActor.run { charController?.setSpeechText(Self.stripEmotionTags(from: raw)) }
+                        }
                         try await audioPlayerRef.playAudioData(segment.data)
                     }
                     Log.pipeline("[Pipeline] Audio consumer finished")
@@ -740,6 +758,10 @@ final class ConversationController: ObservableObject {
         processingTask?.cancel()
         processingTask = nil
 
+        bubbleTask?.cancel()
+        bubbleTask = nil
+        characterController?.setSpeechText(nil)
+
         proactiveTimer?.cancel()
         proactiveTimer = nil
 
@@ -790,6 +812,59 @@ final class ConversationController: ObservableObject {
             with: "",
             options: .regularExpression
         ).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - Pet speech bubble paging (TTS off)
+
+    /// Split a reply into short, readable "pages" for the desktop-pet bubble: one per
+    /// sentence, sub-split at secondary punctuation if a sentence is very long.
+    static func speechPages(from text: String, maxChars: Int = 55) -> [String] {
+        let cleaned = stripEmotionTags(from: text)
+        var sentences: [String] = []
+        var current = ""
+        for ch in cleaned {
+            current.append(ch)
+            if "。！？!?\n".contains(ch) {
+                let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { sentences.append(trimmed) }
+                current = ""
+            }
+        }
+        let tail = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !tail.isEmpty { sentences.append(tail) }
+
+        var pages: [String] = []
+        for sentence in sentences {
+            if sentence.count <= maxChars { pages.append(sentence); continue }
+            var chunk = ""
+            for ch in sentence {
+                chunk.append(ch)
+                if chunk.count >= maxChars && "，,、；; ".contains(ch) {
+                    pages.append(chunk.trimmingCharacters(in: .whitespacesAndNewlines))
+                    chunk = ""
+                }
+            }
+            let rem = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !rem.isEmpty { pages.append(rem) }
+        }
+        return pages
+    }
+
+    /// Page the speech bubble through a reply one sentence at a time on a reading-speed
+    /// timer (used when TTS is off — pet mode only; the bubble gating is in the character).
+    private func pageSpeechBubble(_ text: String) {
+        bubbleTask?.cancel()
+        let pages = Self.speechPages(from: text)
+        guard !pages.isEmpty else { return }
+        bubbleTask = Task { @MainActor [weak self] in
+            for page in pages {
+                if Task.isCancelled { return }
+                self?.characterController?.setSpeechText(page)
+                let ms = min(8000, 1700 + page.count * 95)   // base + scaled by length
+                try? await Task.sleep(nanoseconds: UInt64(ms) * 1_000_000)
+            }
+            // Final page lingers, then the JS auto-hide fades it out.
+        }
     }
 }
 

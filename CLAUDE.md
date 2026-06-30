@@ -25,8 +25,8 @@ macOS desktop AI character app with VRM 3D character rendering, LLM chat, TTS sp
 ```
 AniCompanion/
 ├── AniCompanion/
-│   ├── App/             # App entry, AppState, Configuration
-│   ├── Views/           # SwiftUI views (Main, Chat, Settings)
+│   ├── App/             # App entry (AniCompanionApp), AppDelegate (owns the NSWindow + pet mode), AppState, AppLanguage, Log
+│   ├── Views/           # SwiftUI views (Main, Chat, Settings) + DesktopPet (PetDragView)
 │   ├── Services/        # ChatTransport + HTTPChatService (Hermes), TTS, STT, AudioPlayer, ObjCSupport
 │   ├── Character/       # ThreeVRMCharacterManager, ThreeVRMRenderView (WKWebView bridge to three-vrm)
 │   ├── Pipeline/        # Orchestration (ConversationController, SentenceParser, AudioQueue)
@@ -160,12 +160,14 @@ it answers from the model.
 - **macOS app-icon caching**: After changing the icon, set `CFBundleIconName` + do a Clean Build Folder; the Dock/Finder cache may need `lsregister -f <app>` + `killall Dock`.
 - **i18n needs `CFBundleDevelopmentRegion` in Info.plist**: With a hand-maintained `Info.plist` (`GENERATE_INFOPLIST_FILE: false`), `developmentLanguage: en` in `project.yml` does *not* inject `CFBundleDevelopmentRegion`. Without it, the build ships only `zh-Hant.lproj` (the source language `en` emits no `.lproj`), so CFBundle's only available localization is Chinese and the UI never switches to English regardless of `AppleLanguages`. Fix: declare `CFBundleDevelopmentRegion = en` (and `CFBundleLocalizations = [en, zh-Hant]`) in `Info.plist`. The character **persona** switching is independent — it reads our own `app_language` default, not CFBundle.
 - **Testing the language switch from the CLI is unreliable**: the app is non-sandboxed (reads `~/Library/Preferences/com.anicompanion.app.plist`), but a leftover sandbox **container** makes `defaults read/write com.anicompanion.app` silently redirect to `~/Library/Containers/com.anicompanion.app/...`, which the app never reads. Verify the real language switch via **Settings → Language** in-app, or write directly to the global plist with `PlistBuddy` + `killall cfprefsd`.
+- **`OptionSet.contains(.borderless)` is ALWAYS true**: `.borderless` is rawValue `0` (the empty set), so `styleMask.contains(.borderless)` is a tautology. Detecting "is the window in pet mode?" this way made the whole transition dead code (Desktop Pet "did nothing"). Detect window state via a non-zero member (`!styleMask.contains(.titled)`) or, better, an explicit tracked `Bool` you own — don't re-derive state you already hold (`AppDelegate.isPetActive`). General trap: any `static let foo: T = []` makes `.contains(foo)` constant.
+- **Transparent windows: bypass SwiftUI, use the bare WKWebView as `contentView`**: SwiftUI `WindowGroup` / `NSHostingController` re-assert an opaque window background, and `ThreeVRMRenderView` has its own opaque `RadialGradient` behind the WebView — both block desktop-through transparency. Desktop Pet mode (`AppDelegate.enterPet`) puts the **bare** `WKWebView` (already transparent via `drawsBackground=false` + three.js `alpha:true`) directly as a borderless `isOpaque=false` window's `contentView`. The persistent webView is reused (no reload); resize the window to the pet size **before** installing the webView and dispatch a JS `resize` so three.js re-frames.
 
 ## Status
 
 Implemented: VRM rendering + spring bones, streaming chat via Hermes, TTS with lip sync, STT voice
-input, live streaming chat UI, 16 emotions, skeletal animation clips, 60-min proactive idle timer.
+input, live streaming chat UI, 16 emotions, skeletal animation clips, 60-min proactive idle timer,
+desktop pet mode (borderless/transparent draggable overlay with resize + speech bubble).
 
 Not yet done / deferred:
 - Cron-scheduled proactive push (needs polling Hermes' jobs API or a delivery adapter)
-- Desktop overlay/pet mode

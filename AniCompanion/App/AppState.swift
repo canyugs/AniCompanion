@@ -70,6 +70,10 @@ final class AppState: ObservableObject {
     /// Whether the chat backend is currently connected/reachable.
     @Published var isConnected: Bool = false
 
+    /// Desktop pet mode: the window becomes a borderless, transparent, always-on-top,
+    /// draggable character with no chat panel. Toggled from the Character menu (⌘⇧D).
+    @Published var petMode: Bool = false
+
     // MARK: - Private State
 
     /// Tracks whether services have been initialized to avoid double initialization.

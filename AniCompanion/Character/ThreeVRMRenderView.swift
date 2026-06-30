@@ -238,6 +238,13 @@ struct ThreeVRMWebView: NSViewRepresentable {
     @ObservedObject var characterManager: ThreeVRMCharacterManager
 
     func makeNSView(context: Context) -> WKWebView {
+        // Reuse the already-loaded webview if one exists, so remounting this view
+        // (e.g. toggling Desktop Pet mode, which restructures the view tree) keeps
+        // the scene loaded instead of reloading the model from scratch.
+        if let existing = characterManager.webView {
+            return existing
+        }
+
         // Configure WKWebView
         let config = WKWebViewConfiguration()
         let contentController = WKUserContentController()
@@ -250,8 +257,13 @@ struct ThreeVRMWebView: NSViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
 
-        // Transparent background so SwiftUI gradient shows through
+        // Transparent background so the SwiftUI gradient (windowed) or the desktop (pet mode)
+        // shows through. `drawsBackground` is the load-bearing KVC trick on macOS;
+        // `underPageBackgroundColor` kills the over-scroll / initial white flash (macOS 12+).
         webView.setValue(false, forKey: "drawsBackground")
+        if #available(macOS 12.0, *) {
+            webView.underPageBackgroundColor = .clear
+        }
 
         // Enable Safari Web Inspector for debugging
         webView.isInspectable = true

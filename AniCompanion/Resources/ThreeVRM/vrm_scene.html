@@ -8,6 +8,41 @@
   * { margin: 0; padding: 0; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; }
   canvas { display: block; width: 100%; height: 100%; }
+
+  /* Desktop-pet speech bubble (caption at the bottom, so it never covers her face
+     and a centered bubble can't be cropped by the narrow window width) */
+  #bubble {
+    position: fixed;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%) translateY(6px);
+    max-width: 90%;
+    max-height: 40%;
+    overflow: hidden;
+    box-sizing: border-box;
+    padding: 9px 13px;
+    background: rgba(22, 20, 32, 0.85);
+    color: #fff;
+    font: 500 15px/1.42 -apple-system, "PingFang TC", "Helvetica Neue", sans-serif;
+    border-radius: 14px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    text-align: center;
+    white-space: pre-wrap;
+    word-break: break-word;
+    opacity: 0;
+    transition: opacity 0.22s ease, transform 0.22s ease;
+    pointer-events: none;
+    -webkit-backdrop-filter: blur(3px);
+  }
+  #bubble.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #bubble::after {   /* little tail pointing up toward her */
+    content: "";
+    position: absolute;
+    top: -7px; left: 50%; transform: translateX(-50%);
+    border-left: 7px solid transparent;
+    border-right: 7px solid transparent;
+    border-bottom: 7px solid rgba(22, 20, 32, 0.85);
+  }
 </style>
 <script type="importmap">
 {
@@ -21,6 +56,7 @@
 </head>
 <body>
 <canvas id="canvas"></canvas>
+<div id="bubble"></div>
 <script type="module" src="vrm_scene.js"></script>
 </body>
 </html>

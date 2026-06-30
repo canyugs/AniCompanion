@@ -7,9 +7,12 @@ import { VRMLoaderPlugin, VRMUtils, VRMHumanBoneName, VRMExpressionPresetName } 
 // ============================================================
 
 const canvas = document.getElementById('canvas');
-const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+// alpha:true gives the canvas an alpha channel; premultipliedAlpha:false avoids dark edge
+// halos when the transparent character composites over the desktop in pet mode.
+const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, premultipliedAlpha: false, antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x000000, 0); // fully transparent clear (alpha 0); leave scene.background null
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 const scene = new THREE.Scene();
@@ -40,6 +43,35 @@ window.addEventListener('resize', () => {
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
+
+// ============================================================
+// Speech bubble (Desktop Pet mode) — driven from Swift via window.showBubble / hideBubble
+// ============================================================
+const bubbleEl = document.getElementById('bubble');
+let bubbleHideTimer = null;
+window.showBubble = (text) => {
+    if (!bubbleEl) return;
+    const apply = () => {
+        bubbleEl.textContent = text;
+        bubbleEl.classList.add('show');
+        if (bubbleHideTimer) clearTimeout(bubbleHideTimer);
+        // Auto-hide a while after the last update (scaled by length so longer lines linger).
+        const ms = Math.min(9000, 2800 + text.length * 55);
+        bubbleHideTimer = setTimeout(() => bubbleEl.classList.remove('show'), ms);
+    };
+    // Crossfade when swapping to a new page while already visible.
+    if (bubbleEl.classList.contains('show') && bubbleEl.textContent !== text) {
+        bubbleEl.classList.remove('show');
+        setTimeout(apply, 150);
+    } else {
+        apply();
+    }
+};
+window.hideBubble = () => {
+    if (!bubbleEl) return;
+    if (bubbleHideTimer) { clearTimeout(bubbleHideTimer); bubbleHideTimer = null; }
+    bubbleEl.classList.remove('show');
+};
 
 // ============================================================
 // State
