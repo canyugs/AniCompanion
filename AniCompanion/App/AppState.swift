@@ -21,6 +21,15 @@ final class AppState: ObservableObject {
     /// MiniMax group ID required by the T2A v2 endpoint.
     @AppStorage("minimax_group_id") var minimaxGroupID: String = ""
 
+    /// Which TTS provider to use when voice output is enabled.
+    @AppStorage(TTSProvider.storageKey) var ttsProvider: String = TTSProvider.miniMax.rawValue
+
+    /// Base URL for a local BlueMagpie-TTS HTTP server.
+    @AppStorage("bluemagpie_tts_endpoint") var blueMagpieTTSEndpoint: String = "http://127.0.0.1:8765"
+
+    /// BlueMagpie diffusion sampling steps. Lower is faster, higher is usually better quality.
+    @AppStorage("bluemagpie_inference_timesteps") var blueMagpieInferenceTimesteps: Int = 5
+
     /// Which agent backend to talk to. See `ChatBackend`. Each backend stores its own
     /// endpoint + key under per-backend keys (see `ChatBackend.savedEndpoint()` /
     /// `savedAPIKey()`), so switching backends swaps the connection rather than sharing it.
@@ -112,11 +121,7 @@ final class AppState: ObservableObject {
             .map { $0 == .connected }
             .assign(to: \.isConnected, on: self)
 
-        let ttsService = TTSService(
-            apiKey: minimaxAPIKey,
-            groupId: minimaxGroupID,
-            voiceId: ttsVoiceID
-        )
+        let ttsService: any TTSServiceProtocol = makeTTSService()
 
         let sttService = STTService()
         let audioPlayer = AudioPlayerService()
@@ -142,6 +147,22 @@ final class AppState: ObservableObject {
 
         // Trigger launch greeting after model loads.
         controller.triggerLaunchGreeting()
+    }
+
+    private func makeTTSService() -> any TTSServiceProtocol {
+        switch TTSProvider(rawValue: ttsProvider) ?? .miniMax {
+        case .miniMax:
+            return TTSService(
+                apiKey: minimaxAPIKey,
+                groupId: minimaxGroupID,
+                voiceId: ttsVoiceID
+            )
+        case .blueMagpie:
+            return BlueMagpieTTSService(
+                endpoint: blueMagpieTTSEndpoint,
+                inferenceTimesteps: blueMagpieInferenceTimesteps
+            )
+        }
     }
 
     /// Tears down existing services and recreates them with current settings.

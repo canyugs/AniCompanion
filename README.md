@@ -37,7 +37,8 @@ end-to-end and runnable locally so your conversations stay on your machine.
 - **Streaming chat** through a pluggable agent backend. Ships with **Hermes Agent** (the validated
   reference) and a generic **OpenAI-compatible** backend (Ollama, LM Studio, vLLM, OpenRouter, …);
   adding another is a one-`case` change — see [`CONTRIBUTING.md`](CONTRIBUTING.md).
-- **Text-to-speech** via MiniMax Speech-02-Turbo, with **amplitude-driven lip sync**.
+- **Text-to-speech** via MiniMax Speech-02-Turbo or a local BlueMagpie-TTS server, with
+  **amplitude-driven lip sync**.
 - **Speech-to-text** voice input using Apple's on-device Speech framework (auto-stops on silence).
 - **Emotions** — 16 emotion tags from the LLM drive the avatar's facial expressions.
 - **Proactive companion** — greets you on launch and speaks up after a period of inactivity
@@ -53,8 +54,9 @@ end-to-end and runnable locally so your conversations stay on your machine.
 - **[XcodeGen](https://github.com/yonaskolb/XcodeGen)** — `brew install xcodegen`
 - A running **agent gateway** — a **Hermes Agent** gateway is the validated path (see
   [Bring your own agent](#bring-your-own-agent))
-- *(Optional, for voice)* a **MiniMax** account for TTS (API key + Group ID). Without it, disable
-  TTS in Settings and 小光 replies with text + expressions only.
+- *(Optional, for voice)* either a **MiniMax** account for cloud TTS (API key + Group ID) or a
+  local **BlueMagpie-TTS** server. Without TTS, disable voice in Settings and 小光 replies with
+  text + expressions only.
 
 ## Quick start
 
@@ -75,7 +77,10 @@ On first launch, open **Settings (⚙️)** and fill in:
 - **Agent backend** (Hermes by default), its **Endpoint** (default `http://127.0.0.1:8642`) and
   **API Key** — you'll need a gateway **already running** for chat to work (see
   [Bring your own agent](#bring-your-own-agent) below)
-- *(optional)* **MiniMax API Key** + **Group ID** for voice
+- *(optional)* **TTS Provider**:
+  - **MiniMax** — enter your API Key, Group ID, and Voice ID.
+  - **BlueMagpie** — run the local server below and set its URL (default
+    `http://127.0.0.1:8765`).
 
 > **First launch needs internet** — the three-vrm runtime loads from a CDN the first time, then
 > caches. When it's working you'll see 小光 appear in the window and greet you; type in the box (or
@@ -112,6 +117,34 @@ Setting up the Hermes reference backend, briefly:
 
 Full walkthrough, including optional MCP tools for richer proactive behavior, is in
 [`docs/hermes-setup.md`](docs/hermes-setup.md).
+
+## Local BlueMagpie TTS
+
+AniCompanion can use [OpenFormosa/BlueMagpie-TTS](https://github.com/OpenFormosa/BlueMagpie-TTS)
+through a small local HTTP server. Install and test BlueMagpie in its own virtual environment first,
+then install `soundfile` if it is not already present:
+
+```bash
+cd ~/dev/BlueMagpie-TTS
+source .venv/bin/activate
+pip install soundfile
+python ~/dev/AniCompanion/Tools/blue_magpie_tts_server.py
+```
+
+The server listens on `http://127.0.0.1:8765`. Test it before using it from the app:
+
+```bash
+curl -X POST http://127.0.0.1:8765/v1/tts \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"今天天氣真好。","inference_timesteps":5}' \
+  --output /tmp/bluemagpie.wav
+
+afplay /tmp/bluemagpie.wav
+```
+
+The endpoint returns `audio/wav`. In AniCompanion, choose
+**Settings → Voice → TTS Provider → BlueMagpie**, set the server URL, and tune
+**Inference Timesteps**. Lower values are faster; higher values usually improve quality.
 
 ## The VRM model
 
@@ -166,7 +199,7 @@ Architecture details and developer notes are in [`CLAUDE.md`](CLAUDE.md).
 | `xcodegen: command not found` | `brew install xcodegen` (see [Requirements](#requirements)). |
 | The window opens but the character never appears | First launch needs **internet** (the three-vrm runtime loads from a CDN). Also confirm `./scripts/download-model.sh` ran and a `.vrm` exists in `AniCompanion/Resources/VRMModel/`. |
 | You type a message and nothing happens | Your **agent gateway isn't running / reachable**. Start it (e.g. `hermes gateway`) and check the connection indicator in Settings. For Hermes, a 401 means the **API Key** in Settings doesn't match `API_SERVER_KEY`. |
-| 小光 replies in text but doesn't speak | TTS is off or unconfigured — that's fine. For voice, add your **MiniMax API Key + Group ID** in Settings, or leave TTS disabled. |
+| 小光 replies in text but doesn't speak | TTS is off or unconfigured — that's fine. For voice, configure **MiniMax** or **BlueMagpie** under Settings → Voice, or leave TTS disabled. |
 | Voice input does nothing | On first use macOS prompts for **Microphone** and **Speech Recognition** permission — allow both (System Settings → Privacy & Security). |
 
 More runtime diagnostics (health checks, connection states) are in [`docs/hermes-setup.md`](docs/hermes-setup.md).
