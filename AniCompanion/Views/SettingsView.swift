@@ -229,7 +229,7 @@ struct SettingsView: View {
                             .pickerStyle(.radioGroup)
                             .labelsHidden()
 
-                            Text("Interface & character language")
+                            Text("Interface & character language. The interface updates after an app restart; the character switches right away.")
                                 .font(.system(size: 11))
                                 .foregroundStyle(.white.opacity(0.4))
                         }

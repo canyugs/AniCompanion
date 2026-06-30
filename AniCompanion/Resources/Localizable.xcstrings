@@ -147,9 +147,10 @@
         "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "初始化中…" } }
       }
     },
-    "Interface & character language" : {
+    "Interface & character language. The interface updates after an app restart; the character switches right away." : {
+      "comment" : "Settings: helper text under the Language picker",
       "localizations" : {
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "介面與角色語言" } }
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "介面與角色語言。介面會在重新啟動 App 後更新；角色則立即切換。" } }
       }
     },
     "Interrupt & speak" : {
