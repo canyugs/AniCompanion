@@ -68,6 +68,8 @@ final class OpenAITTSService: TTSServiceProtocol, Sendable {
         VoiceOption(id: "cedar", englishTrait: "steady, high-quality", traditionalChineseTrait: "穩定、高品質", isRecommended: true)
     ]
 
+    private static let legacyModels: Set<String> = ["tts-1", "tts-1-hd"]
+
     static let legacyVoiceIDs = [
         "alloy",
         "ash",
@@ -82,7 +84,7 @@ final class OpenAITTSService: TTSServiceProtocol, Sendable {
 
     static func voiceOptions(for model: String) -> [VoiceOption] {
         let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
-        if ["tts-1", "tts-1-hd"].contains(trimmed) {
+        if legacyModels.contains(trimmed) {
             return voiceOptions.filter { legacyVoiceIDs.contains($0.id) }
         }
         return voiceOptions
@@ -223,7 +225,7 @@ final class OpenAITTSService: TTSServiceProtocol, Sendable {
     }
 
     private var supportsInstructions: Bool {
-        !["tts-1", "tts-1-hd"].contains(effectiveModel)
+        !Self.legacyModels.contains(effectiveModel)
     }
 
     private func instructionText(for emotion: Emotion) -> String? {

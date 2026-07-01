@@ -154,7 +154,8 @@ struct SettingsView: View {
                                 .labelsHidden()
                             }
 
-                            if ttsProvider == .miniMax {
+                            switch ttsProvider {
+                            case .miniMax:
                                 SettingsField(label: "MiniMax API Key") {
                                     SecureField("eyJ...", text: $minimaxAPIKey)
                                         .textFieldStyle(.plain)
@@ -199,7 +200,7 @@ struct SettingsView: View {
                                                 .stroke(Color.white.opacity(0.1), lineWidth: 1)
                                         )
                                 }
-                            } else if ttsProvider == .blueMagpie {
+                            case .blueMagpie:
                                 SettingsField(label: "BlueMagpie Server") {
                                     TextField("http://127.0.0.1:8765", text: $blueMagpieTTSEndpoint)
                                         .textFieldStyle(.plain)
@@ -222,7 +223,7 @@ struct SettingsView: View {
                                             .foregroundStyle(.white)
                                     }
                                 }
-                            } else if ttsProvider == .openAI {
+                            case .openAI:
                                 SettingsField(label: "OpenAI API Key") {
                                     SecureField("sk-...", text: $openAITTSAPIKey)
                                         .textFieldStyle(.plain)
@@ -348,7 +349,7 @@ struct SettingsView: View {
                             .pickerStyle(.radioGroup)
                             .labelsHidden()
 
-                            Text(languageHelperText)
+                            Text("Interface & character language. The interface updates after an app restart; the character switches right away.")
                                 .font(.system(size: 11))
                                 .foregroundStyle(.white.opacity(0.4))
                         }
@@ -432,7 +433,12 @@ struct SettingsView: View {
         let text = previewText
 
         voicePreviewTask = Task {
-            let result: Result<Data, Error> = await Task.detached {
+            defer {
+                isTestingVoice = false
+                voicePreviewTask = nil
+            }
+
+            do {
                 var audioData = Data()
                 for try await chunk in service.synthesize(text: text, emotion: .happy) {
                     try Task.checkCancellation()
@@ -441,14 +447,7 @@ struct SettingsView: View {
                 guard !audioData.isEmpty else {
                     throw TTSError.decodingError("TTS preview returned empty audio.")
                 }
-                return audioData
-            }.result
-
-            isTestingVoice = false
-            voicePreviewTask = nil
-
-            do {
-                let audioData = try result.get()
+                try Task.checkCancellation()
                 try await previewAudioPlayer.playAudioData(audioData)
             } catch is CancellationError {
                 previewAudioPlayer.stop()
@@ -469,15 +468,6 @@ struct SettingsView: View {
 
     private var previewText: String {
         String(localized: "Hi, I'm Xiaoguang. This is a voice preview.")
-    }
-
-    private var languageHelperText: String {
-        switch language {
-        case .english:
-            return "Interface & character language. The interface updates after an app restart; the character switches right away."
-        case .traditionalChinese:
-            return "介面與角色語言。介面會在重新啟動 App 後更新；角色則立即切換。"
-        }
     }
 
     private func makePreviewTTSService() -> any TTSServiceProtocol {
