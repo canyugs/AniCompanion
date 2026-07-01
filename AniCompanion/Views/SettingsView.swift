@@ -431,24 +431,24 @@ struct SettingsView: View {
         let service = makePreviewTTSService()
         let text = previewText
 
-        voicePreviewTask = Task { @MainActor in
-            defer {
-                isTestingVoice = false
-                voicePreviewTask = nil
-            }
-
-            do {
+        voicePreviewTask = Task {
+            let result: Result<Data, Error> = await Task.detached {
                 var audioData = Data()
                 for try await chunk in service.synthesize(text: text, emotion: .happy) {
                     try Task.checkCancellation()
                     audioData.append(chunk)
                 }
-
                 guard !audioData.isEmpty else {
                     throw TTSError.decodingError("TTS preview returned empty audio.")
                 }
+                return audioData
+            }.result
 
-                try Task.checkCancellation()
+            isTestingVoice = false
+            voicePreviewTask = nil
+
+            do {
+                let audioData = try result.get()
                 try await previewAudioPlayer.playAudioData(audioData)
             } catch is CancellationError {
                 previewAudioPlayer.stop()
@@ -468,12 +468,7 @@ struct SettingsView: View {
     }
 
     private var previewText: String {
-        switch language {
-        case .english:
-            return String(localized: "Hi, I'm Xiaoguang. This is a voice preview.")
-        case .traditionalChinese:
-            return String(localized: "你好，我是小光，這是語音試聽。")
-        }
+        String(localized: "Hi, I'm Xiaoguang. This is a voice preview.")
     }
 
     private var languageHelperText: String {

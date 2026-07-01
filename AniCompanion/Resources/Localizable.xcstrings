@@ -393,12 +393,6 @@
       "localizations" : {
         "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "VRM 模型檔名" } }
       }
-    },
-    "你好，我是小光，這是語音試聽。" : {
-      "comment" : "Settings: Traditional Chinese sample sentence for TTS preview",
-      "localizations" : {
-        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "你好，我是小光，這是語音試聽。" } }
-      }
     }
   },
   "version" : "1.0"
