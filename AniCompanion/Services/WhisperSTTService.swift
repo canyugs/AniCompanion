@@ -22,13 +22,15 @@ final class WhisperSTTService: STTServiceProtocol {
     // MARK: - Private State
 
     private let audioCapture = WhisperAudioCapture()
-    private var silenceTimer: Timer?
+    private var silenceTimerSource: DispatchSourceTimer?
     private var hasDetectedSound: Bool = false
+    private var recordingTask: Task<Void, Never>?
+    private var currentAudioURL: URL?
 
     private let initialSpeechTimeout: TimeInterval = 5.0
     private let silenceTimeout: TimeInterval = 2.0
-    // ponytail: RMS threshold for silence detection — tune if too sensitive/insensitive
-    private let silenceRMSThreshold: Float = 0.01
+    // ponytail: 0.03 ignores typical laptop fan / ambient room noise
+    private let silenceRMSThreshold: Float = 0.03
 
     init(endpoint: String, apiKey: String, model: String) {
         self.endpoint = endpoint
@@ -39,15 +41,19 @@ final class WhisperSTTService: STTServiceProtocol {
     // MARK: - STTServiceProtocol
 
     func startListening(locale: Locale) -> AsyncThrowingStream<String, Error> {
-        AsyncThrowingStream { continuation in
+        // Tear down any previous session to avoid leaking the old continuation.
+        tearDown()
+
+        return AsyncThrowingStream { continuation in
             let task = Task { @MainActor in
                 do {
                     try await self.ensureMicrophoneAccess()
                     try await Task.sleep(nanoseconds: 300_000_000)
+                    try Task.checkCancellation()
 
                     self.isListening = true
-                    let audioURL = try self.audioCapture.startRecording()
-                    self.audioCapture.onRMS = { [weak self] rms in
+
+                    let onRMS: @Sendable (Float) -> Void = { [weak self] rms in
                         Task { @MainActor [weak self] in
                             guard let self, self.isListening else { return }
                             if rms > self.silenceRMSThreshold {
@@ -56,26 +62,26 @@ final class WhisperSTTService: STTServiceProtocol {
                             }
                         }
                     }
+                    let audioURL = try self.audioCapture.startRecording(onRMS: onRMS)
+                    self.currentAudioURL = audioURL
                     self.resetSilenceTimer()
 
-                    // Wait until stopListening() is called (by silence timer or user).
                     await withCheckedContinuation { (stopped: CheckedContinuation<Void, Never>) in
                         self.audioCapture.onStop = { stopped.resume() }
                     }
 
                     self.isListening = false
-                    self.invalidateSilenceTimer()
+                    self.cancelSilenceTimer()
 
                     let fileData = try Data(contentsOf: audioURL)
                     guard fileData.count > 1000 else {
-                        // Too short to contain speech.
-                        try? FileManager.default.removeItem(at: audioURL)
+                        self.cleanupAudioFile()
                         continuation.finish()
                         return
                     }
 
                     let transcription = try await self.transcribe(audioURL: audioURL, locale: locale)
-                    try? FileManager.default.removeItem(at: audioURL)
+                    self.cleanupAudioFile()
 
                     let trimmed = transcription.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !trimmed.isEmpty {
@@ -90,10 +96,11 @@ final class WhisperSTTService: STTServiceProtocol {
                     continuation.finish(throwing: error)
                 }
             }
+            self.recordingTask = task
 
             continuation.onTermination = { @Sendable _ in
-                Task { @MainActor in self.tearDown() }
                 task.cancel()
+                Task { @MainActor in self.tearDown() }
             }
         }
     }
@@ -143,7 +150,6 @@ final class WhisperSTTService: STTServiceProtocol {
         appendField("language", String(locale.identifier.prefix(2)))
         appendField("response_format", "json")
 
-        // File part.
         let audioData = try Data(contentsOf: audioURL)
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n".data(using: .utf8)!)
@@ -165,30 +171,44 @@ final class WhisperSTTService: STTServiceProtocol {
         return result.text
     }
 
-    // MARK: - Silence Timer
+    // MARK: - Silence Timer (DispatchSource — immune to App Nap)
 
     private func resetSilenceTimer() {
-        silenceTimer?.invalidate()
+        cancelSilenceTimer()
         let interval = hasDetectedSound ? silenceTimeout : initialSpeechTimeout
-        silenceTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
+        let timer = DispatchSource.makeTimerSource(flags: .strict, queue: .main)
+        timer.schedule(deadline: .now() + interval)
+        timer.setEventHandler { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, self.isListening else { return }
                 Log.stt("[STT-Whisper] Silence timeout — auto-stopping recording")
                 self.stopListening()
             }
         }
+        silenceTimerSource = timer
+        timer.resume()
     }
 
-    private func invalidateSilenceTimer() {
-        silenceTimer?.invalidate()
-        silenceTimer = nil
+    private func cancelSilenceTimer() {
+        silenceTimerSource?.cancel()
+        silenceTimerSource = nil
     }
 
     // MARK: - Cleanup
 
+    private func cleanupAudioFile() {
+        if let url = currentAudioURL {
+            try? FileManager.default.removeItem(at: url)
+            currentAudioURL = nil
+        }
+    }
+
     private func tearDown() {
-        invalidateSilenceTimer()
+        cancelSilenceTimer()
         audioCapture.stop()
+        cleanupAudioFile()
+        recordingTask?.cancel()
+        recordingTask = nil
         isListening = false
         hasDetectedSound = false
     }
@@ -196,17 +216,14 @@ final class WhisperSTTService: STTServiceProtocol {
 
 // MARK: - WhisperAudioCapture
 
-/// Records microphone input to a WAV file. Detects silence via RMS for the timer callback.
+/// Records microphone input to a WAV file. Reports RMS for silence detection.
 private final class WhisperAudioCapture: @unchecked Sendable {
 
     private var engine: AVAudioEngine?
     private var outputFile: AVAudioFile?
-    private var outputURL: URL?
     var onStop: (() -> Void)?
-    // ponytail: simple RMS callback for silence detection
-    var onRMS: ((Float) -> Void)?
 
-    func startRecording() throws -> URL {
+    func startRecording(onRMS: @escaping @Sendable (Float) -> Void) throws -> URL {
         let engine = AVAudioEngine()
         self.engine = engine
 
@@ -219,7 +236,6 @@ private final class WhisperAudioCapture: @unchecked Sendable {
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension("wav")
-        self.outputURL = tempURL
 
         let file = try AVAudioFile(
             forWriting: tempURL,
@@ -229,15 +245,14 @@ private final class WhisperAudioCapture: @unchecked Sendable {
         )
         self.outputFile = file
 
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { [weak self] buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: nil) { buffer, _ in
             try? file.write(from: buffer)
-            // Compute RMS for silence detection.
             if let channelData = buffer.floatChannelData?[0] {
                 let frameCount = Int(buffer.frameLength)
                 var sum: Float = 0
                 for i in 0..<frameCount { sum += channelData[i] * channelData[i] }
                 let rms = sqrtf(sum / Float(max(frameCount, 1)))
-                self?.onRMS?(rms)
+                onRMS(rms)
             }
         }
 
